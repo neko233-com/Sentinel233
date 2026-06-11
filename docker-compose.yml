@@ -1,0 +1,18 @@
+services:
+  sentinel233:
+    build: .
+    container_name: sentinel233
+    ports:
+      - "23390:23390"
+      - "23391:23391"
+    volumes:
+      - sentinel233-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:23390/healthz"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+
+volumes:
+  sentinel233-data:

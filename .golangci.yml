@@ -1,0 +1,22 @@
+version: "2"
+linters:
+  enable:
+    - errcheck
+    - gosimple
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+  settings:
+    errcheck:
+      exclude-functions:
+        - (io.Closer).Close
+        - (net.Listener).Close
+run:
+  timeout: 5m
+  build-tags: []
+issues:
+  exclude-dirs:
+    - bin
+    - data
+    - .data

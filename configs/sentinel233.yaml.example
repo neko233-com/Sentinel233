@@ -1,0 +1,47 @@
+server:
+  addr: "0.0.0.0"
+  port: 23390
+
+storage:
+  data_dir: "./data"
+  retention_days: 15
+  flush_interval_seconds: 10
+  max_open_files: 1024
+  compaction_every_seconds: 3600
+
+scrape:
+  interval_seconds: 15
+  timeout_seconds: 10
+  targets:
+    - name: "sentinel233-self"
+      endpoint: "http://localhost:23391/metrics"
+      labels:
+        instance: "localhost:23391"
+        job: "sentinel233"
+
+alert:
+  enabled: true
+  rules:
+    - name: "InstanceDown"
+      expr: "up == 0"
+      duration: "1m"
+      severity: "critical"
+      notify_url: ""
+    - name: "HighMemory"
+      expr: "process_resident_memory_bytes > 1073741824"
+      duration: "5m"
+      severity: "warning"
+      notify_url: ""
+
+agent:
+  listen_addr: "0.0.0.0:23391"
+  labels:
+    instance: "localhost"
+    job: "sentinel233"
+
+i18n:
+  default: "zh-CN"
+  supported:
+    - "zh-CN"
+    - "en-US"
+    - "ja-JP"

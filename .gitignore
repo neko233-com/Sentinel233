@@ -1,0 +1,13 @@
+bin/
+data/
+.data/
+*.exe
+*.test
+*.out
+.env
+.DS_Store
+Thumbs.db
+__pycache__/
+*.db
+*.db-shm
+*.db-wal
