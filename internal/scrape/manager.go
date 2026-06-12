@@ -16,27 +16,27 @@ import (
 )
 
 type Manager struct {
-	db       *tsdb.DB
-	config   config.ScrapeConfig
-	client   *http.Client
-	logger   *slog.Logger
-	mu       sync.RWMutex
-	targets  []*Target
-	stopCh   chan struct{}
-	wg       sync.WaitGroup
+	db      *tsdb.DB
+	config  config.ScrapeConfig
+	client  *http.Client
+	logger  *slog.Logger
+	mu      sync.RWMutex
+	targets []*Target
+	stopCh  chan struct{}
+	wg      sync.WaitGroup
 }
 
 type Target struct {
-	Name     string
-	Endpoint string
-	Labels   map[string]string
+	Name       string
+	Endpoint   string
+	Labels     map[string]string
 	LastScrape time.Time
 	LastError  error
 	Healthy    bool
 }
 
 type ScrapeResult struct {
-	Labels tsdb.Labels
+	Labels  tsdb.Labels
 	Samples []tsdb.Sample
 }
 
@@ -91,6 +91,23 @@ func (m *Manager) AddTarget(name, endpoint string, labels map[string]string) {
 		Labels:   labels,
 		Healthy:  true,
 	})
+}
+
+func (m *Manager) ApplyConfig(cfg config.ScrapeConfig) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.config = cfg
+	m.client = &http.Client{Timeout: time.Duration(cfg.Timeout) * time.Second}
+	m.targets = m.targets[:0]
+	for _, t := range cfg.Targets {
+		m.targets = append(m.targets, &Target{
+			Name:     t.Name,
+			Endpoint: t.Endpoint,
+			Labels:   t.Labels,
+			Healthy:  true,
+		})
+	}
 }
 
 func (m *Manager) RemoveTarget(endpoint string) {

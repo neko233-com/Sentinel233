@@ -1,5 +1,5 @@
 {
-  "app.title": "Sentinel233 监控面板",
+  "app.title": "Sentinel233 Server 监控面板",
   "nav.dashboard": "仪表盘",
   "nav.metrics": "指标查询",
   "nav.alerts": "告警",

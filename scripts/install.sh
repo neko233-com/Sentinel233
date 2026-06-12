@@ -37,7 +37,7 @@ main() {
     VERSION=$(get_latest_version)
   fi
 
-  VER_NUM=$(echo "$VERSION" | sed 's/^[vV]//')
+  VER_NUM="${VERSION#[vV]}"
 
   if [ -n "${SENTINEL233_INSTALL:-}" ]; then
     INSTALL_DIR="$SENTINEL233_INSTALL"
@@ -54,7 +54,7 @@ main() {
   fi
 
   TMPDIR=$(mktemp -d)
-  trap "rm -rf $TMPDIR" EXIT
+  trap 'rm -rf "$TMPDIR"' EXIT
 
   echo "Installing ${BINARY} ${VERSION} for ${OS}/${ARCH}..."
 

@@ -7,6 +7,9 @@ on:
 permissions:
   contents: write
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   release:
     runs-on: ubuntu-latest
@@ -38,21 +41,22 @@ jobs:
             EXT=""
             if [ "$GOOS" = "windows" ]; then EXT=".exe"; fi
 
-            # Build sentinel233
-            CGO_ENABLED=0 GOOS=$GOOS GOARCH=$GOARCH go build -ldflags="$LDFLAGS" -o "sentinel233-${VERSION#v}-${GOOS}-${GOARCH}${EXT}" ./cmd/sentinel233
-            # Build sentinel233-agent
-            CGO_ENABLED=0 GOOS=$GOOS GOARCH=$GOARCH go build -ldflags="$LDFLAGS" -o "sentinel233-agent-${VERSION#v}-${GOOS}-${GOARCH}${EXT}" ./cmd/sentinel233-agent
+            export CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH"
+            go build -ldflags="$LDFLAGS" -o "sentinel233-server-${VERSION#v}-${GOOS}-${GOARCH}${EXT}" ./cmd/sentinel233-server
+            go build -ldflags="$LDFLAGS" -o "sentinel233-${VERSION#v}-${GOOS}-${GOARCH}${EXT}" ./cmd/sentinel233
+            go build -ldflags="$LDFLAGS" -o "sentinel233-agent-${VERSION#v}-${GOOS}-${GOARCH}${EXT}" ./cmd/sentinel233-agent
           done
 
       - name: Create checksums
         run: |
-          VERSION=${GITHUB_REF#refs/tags/}
-          sha256sum sentinel233-*.tar.gz sentinel233-*.exe sentinel233-agent-* > sha256sums.txt 2>/dev/null || sha256sum sentinel233-* > sha256sums.txt
+          sha256sum sentinel233-server-* sentinel233-agent-* sentinel233-[0-9]*-* > sha256sums.txt
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
           files: |
-            sentinel233-*
+            sentinel233-server-*
+            sentinel233-agent-*
+            sentinel233-[0-9]*-*
             sha256sums.txt

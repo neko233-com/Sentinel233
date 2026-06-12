@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -75,6 +76,7 @@ func (s *Server) Router() chi.Router {
 	// Public endpoints
 	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok")) })
 	r.Get("/readyz", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok")) })
+	r.Get("/favicon.ico", s.handleFavicon)
 	r.Post("/api/login", s.handleLogin)
 	r.Get("/api/i18n/{lang}", s.handleI18n)
 	r.Get("/api/v1/status/buildinfo", s.handleStatusBuildinfo)
@@ -90,6 +92,10 @@ func (s *Server) Router() chi.Router {
 	r.Post("/api/v1/write", s.handleRemoteWrite)
 	r.Get("/api/v1/status/config", s.handleStatusConfig)
 	r.Get("/api/v1/status/runtime", s.handleStatusRuntime)
+
+	// Sentinel native ingestion API for first-party high-performance clients.
+	r.Get("/api/sentinel/v1/capabilities", s.handleSentinelCapabilities)
+	r.Post("/api/sentinel/v1/write", s.handleSentinelWrite)
 
 	// Tenant-scoped API (requires auth)
 	r.Route("/api/tenants", func(r chi.Router) {
@@ -138,6 +144,12 @@ func (s *Server) Router() chi.Router {
 		r.Post("/", s.requireRole("admin", s.handleCreateUser))
 		r.Put("/{username}/role", s.requireRole("admin", s.handleUpdateUserRole))
 		r.Delete("/{username}", s.requireRole("admin", s.handleDeleteUser))
+	})
+
+	r.Route("/api/admin", func(r chi.Router) {
+		r.Use(s.tenantMiddleware)
+		r.Get("/config", s.requireRole("admin", s.handleGetAdminConfig))
+		r.Put("/config", s.requireRole("admin", s.handleUpdateAdminConfig))
 	})
 
 	// System API
@@ -240,6 +252,11 @@ func roleAtLeast(userRole, minRole string) bool {
 }
 
 // ============ Auth ============
+
+func (s *Server) handleFavicon(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "image/svg+xml")
+	w.Write([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#34d399"/><text x="32" y="40" text-anchor="middle" font-family="Arial" font-size="30" font-weight="700" fill="#06110d">S</text></svg>`))
+}
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	var req struct {
@@ -604,6 +621,75 @@ func (s *Server) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 	s.jsonOK(w, map[string]interface{}{"status": "success"})
 }
 
+// ============ Admin config handlers ============
+
+func (s *Server) handleGetAdminConfig(w http.ResponseWriter, r *http.Request) {
+	s.jsonOK(w, map[string]interface{}{
+		"status": "success",
+		"data": map[string]interface{}{
+			"config":         s.config,
+			"restartNeeded":  false,
+			"persistedToDB":  true,
+			"configFileNote": "Runtime settings are applied immediately where supported. Storage engine settings take effect after restart.",
+		},
+	})
+}
+
+func (s *Server) handleUpdateAdminConfig(w http.ResponseWriter, r *http.Request) {
+	var next config.Config
+	if err := json.NewDecoder(r.Body).Decode(&next); err != nil {
+		s.jsonError(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	if err := validateRuntimeConfig(&next); err != nil {
+		s.jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	s.config = &next
+	s.scrape.ApplyConfig(next.Scrape)
+
+	if data, err := json.Marshal(next); err == nil {
+		tenantID := s.getTenantID(r)
+		if err := s.store.SetSetting(tenantID, "runtime_config", string(data)); err != nil {
+			s.logger.Warn("admin config: failed to persist setting", "err", err)
+		}
+	}
+
+	s.jsonOK(w, map[string]interface{}{
+		"status": "success",
+		"data": map[string]interface{}{
+			"config":        s.config,
+			"restartNeeded": true,
+			"applied":       []string{"scrape targets", "scrape timeout", "agent labels"},
+		},
+	})
+}
+
+func validateRuntimeConfig(cfg *config.Config) error {
+	if cfg.Server.Port < 0 || cfg.Server.Port > 65535 {
+		return fmt.Errorf("server port must be between 0 and 65535")
+	}
+	if cfg.Storage.RetentionDays <= 0 {
+		return fmt.Errorf("retention days must be greater than 0")
+	}
+	if cfg.Storage.FlushInterval <= 0 {
+		return fmt.Errorf("flush interval must be greater than 0")
+	}
+	if cfg.Scrape.Interval <= 0 {
+		return fmt.Errorf("scrape interval must be greater than 0")
+	}
+	if cfg.Scrape.Timeout <= 0 {
+		return fmt.Errorf("scrape timeout must be greater than 0")
+	}
+	for _, target := range cfg.Scrape.Targets {
+		if target.Name == "" || target.Endpoint == "" {
+			return fmt.Errorf("scrape targets require name and endpoint")
+		}
+	}
+	return nil
+}
+
 // ============ Prometheus handlers ============
 
 func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
@@ -726,14 +812,138 @@ func (s *Server) handleAlerts(w http.ResponseWriter, r *http.Request) {
 	s.jsonOK(w, map[string]interface{}{"status": "success", "data": result})
 }
 
-func (s *Server) handleGetAlerts(w http.ResponseWriter, r *http.Request)  { s.handleAlerts(w, r) }
+func (s *Server) handleGetAlerts(w http.ResponseWriter, r *http.Request) { s.handleAlerts(w, r) }
 func (s *Server) handleGetAlertHistory(w http.ResponseWriter, r *http.Request) {
 	history := s.alertMgr.GetHistory()
 	s.jsonOK(w, map[string]interface{}{"status": "success", "data": history})
 }
 
-func (s *Server) handleRemoteWrite(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusNoContent)
+type sentinelWriteRequest struct {
+	Resource map[string]string       `json:"resource"`
+	Samples  []sentinelSamplePayload `json:"samples"`
+	Metrics  []sentinelMetricPayload `json:"metrics"`
+}
+
+type sentinelMetricPayload struct {
+	Name        string                  `json:"name"`
+	Description string                  `json:"description"`
+	Unit        string                  `json:"unit"`
+	Type        string                  `json:"type"`
+	Labels      map[string]string       `json:"labels"`
+	Samples     []sentinelSamplePayload `json:"samples"`
+}
+
+type sentinelSamplePayload struct {
+	Name      string            `json:"name"`
+	Timestamp int64             `json:"timestamp"`
+	Value     float64           `json:"value"`
+	Labels    map[string]string `json:"labels"`
+}
+
+func (s *Server) handleSentinelCapabilities(w http.ResponseWriter, r *http.Request) {
+	s.jsonOK(w, map[string]interface{}{
+		"status": "success",
+		"data": map[string]interface{}{
+			"protocol": "sentinel233-native-json",
+			"version":  1,
+			"endpoints": map[string]string{
+				"write":        "/api/sentinel/v1/write",
+				"capabilities": "/api/sentinel/v1/capabilities",
+			},
+			"sampleTimestamp": "unix milliseconds; unix seconds are accepted and converted",
+			"metricTypes":     []string{"counter", "gauge", "histogram", "summary", "runtime"},
+			"labelSemantics":  []string{"resource labels", "metric labels", "sample labels", "__name__"},
+		},
+	})
+}
+
+func (s *Server) handleSentinelWrite(w http.ResponseWriter, r *http.Request) {
+	var req sentinelWriteRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.jsonError(w, "invalid native write request", http.StatusBadRequest)
+		return
+	}
+
+	written := 0
+	appendSample := func(metric sentinelMetricPayload, sample sentinelSamplePayload) error {
+		name := strings.TrimSpace(sample.Name)
+		if name == "" {
+			name = strings.TrimSpace(metric.Name)
+		}
+		if name == "" {
+			return fmt.Errorf("sample metric name required")
+		}
+		ts := sample.Timestamp
+		if ts == 0 {
+			ts = time.Now().UnixMilli()
+		} else if ts < 100000000000 {
+			ts *= 1000
+		}
+
+		labels := make(map[string]string, len(req.Resource)+len(metric.Labels)+len(sample.Labels)+4)
+		labels["__name__"] = name
+		labels["source"] = "sentinel_native"
+		if metric.Type != "" {
+			labels["metric_type"] = metric.Type
+		}
+		if metric.Unit != "" {
+			labels["unit"] = metric.Unit
+		}
+		for k, v := range req.Resource {
+			labels[k] = v
+		}
+		for k, v := range metric.Labels {
+			labels[k] = v
+		}
+		for k, v := range sample.Labels {
+			labels[k] = v
+		}
+		if err := s.db.Append(labelsMapToTSDB(labels), ts, sample.Value); err != nil {
+			return err
+		}
+		written++
+		return nil
+	}
+
+	for _, sample := range req.Samples {
+		if err := appendSample(sentinelMetricPayload{}, sample); err != nil {
+			s.jsonError(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+	for _, metric := range req.Metrics {
+		for _, sample := range metric.Samples {
+			if err := appendSample(metric, sample); err != nil {
+				s.jsonError(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+		}
+	}
+	if written == 0 {
+		s.jsonError(w, "no samples provided", http.StatusBadRequest)
+		return
+	}
+
+	s.jsonOK(w, map[string]interface{}{
+		"status": "success",
+		"data": map[string]interface{}{
+			"written": written,
+		},
+	})
+}
+
+func labelsMapToTSDB(labels map[string]string) tsdb.Labels {
+	result := make(tsdb.Labels, 0, len(labels))
+	for name, value := range labels {
+		if name == "" {
+			continue
+		}
+		result = append(result, tsdb.Label{Name: name, Value: value})
+	}
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].Name < result[j].Name
+	})
+	return result
 }
 
 func (s *Server) handleStatusConfig(w http.ResponseWriter, r *http.Request) {

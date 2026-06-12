@@ -11,7 +11,7 @@ param([string]$Version = "latest")
 $ErrorActionPreference = "Stop"
 
 $Repo = "neko233-com/Sentinel233"
-$Binary = "sentinel233"
+$Binary = "sentinel233-server"
 
 function Get-Arch {
     $arch = $env:PROCESSOR_ARCHITECTURE

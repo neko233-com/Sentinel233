@@ -8,6 +8,9 @@ on:
 permissions:
   contents: read
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   test:
     strategy:
@@ -21,6 +24,7 @@ jobs:
           go-version: '1.26'
       - run: go vet ./...
       - run: go test ./... -count=1 -timeout=120s
+      - run: go build -o /dev/null ./cmd/sentinel233-server
       - run: go build -o /dev/null ./cmd/sentinel233
       - run: go build -o /dev/null ./cmd/sentinel233-agent
 
@@ -33,7 +37,7 @@ jobs:
           go-version: '1.26'
       - uses: golangci/golangci-lint-action@v9
         with:
-          version: v2
+          version: v2.12.2
           args: --timeout=5m
 
   shellcheck:

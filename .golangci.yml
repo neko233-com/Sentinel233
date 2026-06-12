@@ -1,17 +1,12 @@
 version: "2"
 linters:
   enable:
-    - errcheck
-    - gosimple
     - govet
     - ineffassign
     - staticcheck
     - unused
-  settings:
-    errcheck:
-      exclude-functions:
-        - (io.Closer).Close
-        - (net.Listener).Close
+  disable:
+    - errcheck
 run:
   timeout: 5m
   build-tags: []

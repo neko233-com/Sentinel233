@@ -1,9 +1,9 @@
-# Sentinel233
+# Sentinel233 Server
 
 [![CI](https://github.com/neko233-com/Sentinel233/actions/workflows/ci.yml/badge.svg)](https://github.com/neko233-com/Sentinel233/actions/workflows/ci.yml)
 [![Lint](https://github.com/neko233-com/Sentinel233/actions/workflows/lint.yml/badge.svg)](https://github.com/neko233-com/Sentinel233/actions/workflows/lint.yml)
 
-**存储 + 监控一体化监控面板服务器**。一个二进制 = Prometheus Agent + Grafana，100 台游戏服务器只需一台 Sentinel233，极大降低监控运维成本。
+**存储 + 监控一体化监控面板服务器**。`sentinel233-server` = Prometheus Agent + Grafana + 原生 Sentinel client ingestion，100 台游戏服务器只需一台 Sentinel233 Server，极大降低监控运维成本。
 
 ## 功能概览
 
@@ -13,6 +13,7 @@
 | **完整 PromQL** | 瞬时/范围向量、二元运算、聚合(sum/avg/min/max/count/stddev/topk...)、30+ 内置函数(rate/increase/delta/abs/ceil/floor/round/sqrt/log...)、标签匹配(=, !=, =~, !~) |
 | **Prometheus 兼容 API** | `/api/v1/query`、`/api/v1/query_range`、`/api/v1/series`、`/api/v1/label/{name}/values` |
 | **Scrape 采集** | 拉模式采集 + OpenMetrics 解析 + 动态目标管理 |
+| **常用集成预设** | Go、JVM、MySQL、PostgreSQL、Redis、Nginx、Linux node_exporter、Docker/cAdvisor、Kubernetes、Blackbox |
 | **告警引擎** | 规则评估 + pending→firing 状态机 + Webhook 通知 |
 | **Grafana 风格 UI** | 暗色主题 SPA、Chart.js 可视化、时间序列图/仪表盘/统计值/表格 |
 | **Dashboard 管理** | 创建/编辑/删除仪表盘、动态添加面板 |
@@ -52,7 +53,7 @@ curl -fsSL .../install-server.sh | bash -s -- v0.1.0
 ### go install
 
 ```bash
-go install github.com/neko233-com/Sentinel233/cmd/sentinel233@latest
+go install github.com/neko233-com/Sentinel233/cmd/sentinel233-server@latest
 go install github.com/neko233-com/Sentinel233/cmd/sentinel233-agent@latest
 ```
 
@@ -60,13 +61,13 @@ go install github.com/neko233-com/Sentinel233/cmd/sentinel233-agent@latest
 
 ```bash
 # 启动服务端（默认端口 23390）
-sentinel233
+sentinel233-server
 
 # 指定配置文件
-sentinel233 -config sentinel233.yaml
+sentinel233-server -config sentinel233.yaml
 
 # 自定义端口和数据目录
-sentinel233 -addr :8080 -data /var/lib/sentinel233
+sentinel233-server -addr :8080 -data /var/lib/sentinel233
 
 # 启动 Agent（每台游戏服务器部署一个）
 sentinel233-agent -server http://your-server:23390
@@ -180,8 +181,8 @@ docker compose up -d
 ```
 
 ```bash
-docker build -t sentinel233 .
-docker run -d -p 23390:23390 -p 23391:23391 -v sentinel233-data:/data sentinel233
+docker build -t sentinel233-server .
+docker run -d -p 23390:23390 -p 23391:23391 -v sentinel233-data:/data sentinel233-server
 ```
 
 ## API 参考
@@ -199,7 +200,16 @@ docker run -d -p 23390:23390 -p 23391:23391 -v sentinel233-data:/data sentinel23
 | `/api/v1/status/config` | GET | 配置信息 |
 | `/api/v1/status/buildinfo` | GET | 构建信息 |
 | `/api/v1/status/runtime` | GET | 运行时信息 |
-| `/api/v1/write` | POST | Remote Write |
+| `/api/v1/write` | POST | Prometheus Remote Write，支持 snappy block 压缩 protobuf WriteRequest |
+
+`/api/v1/write` 会保留 Prometheus 侧原始 labels 并写入内置 TSDB，适合把现有 Prometheus agent、Grafana Agent、Alloy 或其他 remote_write sender 指向 Sentinel233 Server。
+
+### Sentinel 原生写入 API
+
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/api/sentinel/v1/capabilities` | GET | 原生 client 能力描述 |
+| `/api/sentinel/v1/write` | POST | Sentinel 原生 JSON 样本写入 |
 
 ### Dashboard API
 
@@ -257,10 +267,10 @@ make docker-run     # Docker 启动
 
 ## 命令行参考
 
-### sentinel233 (服务端)
+### sentinel233-server (服务端)
 
 ```
-sentinel233 [flags]
+sentinel233-server [flags]
   -addr string      监听地址 (默认 ":23390")
   -config string    配置文件路径
   -data string      数据目录 (默认 "./data")

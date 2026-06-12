@@ -4,7 +4,7 @@
 set -euo pipefail
 
 REPO="neko233-com/Sentinel233"
-BINARY="sentinel233"
+BINARY="sentinel233-server"
 VERSION="${1:-latest}"
 
 detect_os() {
@@ -36,7 +36,7 @@ main() {
     VERSION=$(get_latest_version)
   fi
 
-  VER_NUM=$(echo "$VERSION" | sed 's/^[vV]//')
+  VER_NUM="${VERSION#[vV]}"
 
   if [ -n "${SENTINEL233_SERVER_INSTALL:-}" ]; then
     INSTALL_DIR="$SENTINEL233_SERVER_INSTALL"
@@ -53,7 +53,7 @@ main() {
   fi
 
   TMPDIR=$(mktemp -d)
-  trap "rm -rf $TMPDIR" EXIT
+  trap 'rm -rf "$TMPDIR"' EXIT
 
   echo "Installing ${BINARY} server ${VERSION} for ${OS}/${ARCH}..."
 
@@ -96,7 +96,7 @@ main() {
   echo "  ${BINARY} -version                     # Show version"
   echo ""
   echo "Enable systemd autostart (Linux):"
-  echo "  sudo systemctl enable --now sentinel233"
+  echo "  sudo systemctl enable --now sentinel233-server"
   echo ""
 
   case ":$PATH:" in

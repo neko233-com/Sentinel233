@@ -9,10 +9,12 @@ LDFLAGS  = -s -w \
 .PHONY: build test test-race lint run-server run-agent clean smoke
 
 build:
+	go build -ldflags="$(LDFLAGS)" -o bin/sentinel233-server.exe ./cmd/sentinel233-server
 	go build -ldflags="$(LDFLAGS)" -o bin/sentinel233.exe ./cmd/sentinel233
 	go build -ldflags="$(LDFLAGS)" -o bin/sentinel233-agent.exe ./cmd/sentinel233-agent
 
 build-linux:
+	GOOS=linux GOARCH=amd64 go build -ldflags="$(LDFLAGS)" -o bin/sentinel233-server ./cmd/sentinel233-server
 	GOOS=linux GOARCH=amd64 go build -ldflags="$(LDFLAGS)" -o bin/sentinel233 ./cmd/sentinel233
 	GOOS=linux GOARCH=amd64 go build -ldflags="$(LDFLAGS)" -o bin/sentinel233-agent ./cmd/sentinel233-agent
 
@@ -32,13 +34,14 @@ vet:
 	go vet ./...
 
 run-server:
-	go run ./cmd/sentinel233 -addr :23390
+	go run ./cmd/sentinel233-server -addr :23390
 
 run-agent:
 	go run ./cmd/sentinel233-agent -addr :23391 -server http://localhost:23390
 
 smoke: build
 	@echo "=== Smoke Test ==="
+	@./bin/sentinel233-server.exe -version
 	@./bin/sentinel233.exe -version
 	@./bin/sentinel233-agent.exe -version
 	@echo "=== Smoke OK ==="
@@ -47,11 +50,12 @@ clean:
 	rm -rf bin/ data/
 
 install:
+	go install -ldflags="$(LDFLAGS)" ./cmd/sentinel233-server
 	go install -ldflags="$(LDFLAGS)" ./cmd/sentinel233
 	go install -ldflags="$(LDFLAGS)" ./cmd/sentinel233-agent
 
 docker-build:
-	docker build -t sentinel233:latest .
+	docker build -t sentinel233-server:latest .
 
 docker-run:
 	docker compose up -d

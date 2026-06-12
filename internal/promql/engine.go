@@ -772,16 +772,6 @@ func stdvarFunc(vals []float64) float64 {
 	return sum / float64(len(vals))
 }
 
-func parseFloat(s string) float64 {
-	v, _ := strconv.ParseFloat(s, 64)
-	return v
-}
-
-func parseDuration(s string) time.Duration {
-	d, _ := parsePromDuration(s)
-	return d
-}
-
 func parsePromDuration(s string) (time.Duration, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {
@@ -828,5 +818,3 @@ func parsePromDuration(s string) (time.Duration, error) {
 	}
 	return total, nil
 }
-
-

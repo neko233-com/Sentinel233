@@ -7,60 +7,60 @@ import (
 )
 
 type Config struct {
-	Server   ServerConfig   `yaml:"server"`
-	Storage  StorageConfig  `yaml:"storage"`
-	Scrape   ScrapeConfig   `yaml:"scrape"`
-	Alert    AlertConfig    `yaml:"alert"`
-	Agent    AgentConfig    `yaml:"agent"`
-	I18n     I18nConfig     `yaml:"i18n"`
+	Server  ServerConfig  `yaml:"server" json:"server"`
+	Storage StorageConfig `yaml:"storage" json:"storage"`
+	Scrape  ScrapeConfig  `yaml:"scrape" json:"scrape"`
+	Alert   AlertConfig   `yaml:"alert" json:"alert"`
+	Agent   AgentConfig   `yaml:"agent" json:"agent"`
+	I18n    I18nConfig    `yaml:"i18n" json:"i18n"`
 }
 
 type ServerConfig struct {
-	Addr string `yaml:"addr"`
-	Port int    `yaml:"port"`
+	Addr string `yaml:"addr" json:"addr"`
+	Port int    `yaml:"port" json:"port"`
 }
 
 type StorageConfig struct {
-	DataDir         string `yaml:"data_dir"`
-	RetentionDays   int    `yaml:"retention_days"`
-	FlushInterval   int    `yaml:"flush_interval_seconds"`
-	MaxOpenFiles    int    `yaml:"max_open_files"`
-	CompactionEvery int    `yaml:"compaction_every_seconds"`
+	DataDir         string `yaml:"data_dir" json:"data_dir"`
+	RetentionDays   int    `yaml:"retention_days" json:"retention_days"`
+	FlushInterval   int    `yaml:"flush_interval_seconds" json:"flush_interval_seconds"`
+	MaxOpenFiles    int    `yaml:"max_open_files" json:"max_open_files"`
+	CompactionEvery int    `yaml:"compaction_every_seconds" json:"compaction_every_seconds"`
 }
 
 type ScrapeConfig struct {
-	Interval     int              `yaml:"interval_seconds"`
-	Timeout      int              `yaml:"timeout_seconds"`
-	Targets      []ScrapeTarget   `yaml:"targets"`
+	Interval int            `yaml:"interval_seconds" json:"interval_seconds"`
+	Timeout  int            `yaml:"timeout_seconds" json:"timeout_seconds"`
+	Targets  []ScrapeTarget `yaml:"targets" json:"targets"`
 }
 
 type ScrapeTarget struct {
-	Name     string            `yaml:"name"`
-	Endpoint string            `yaml:"endpoint"`
-	Labels   map[string]string `yaml:"labels"`
+	Name     string            `yaml:"name" json:"name"`
+	Endpoint string            `yaml:"endpoint" json:"endpoint"`
+	Labels   map[string]string `yaml:"labels" json:"labels"`
 }
 
 type AlertConfig struct {
-	Enabled  bool          `yaml:"enabled"`
-	Rules    []AlertRule   `yaml:"rules"`
+	Enabled bool        `yaml:"enabled" json:"enabled"`
+	Rules   []AlertRule `yaml:"rules" json:"rules"`
 }
 
 type AlertRule struct {
-	Name      string `yaml:"name"`
-	Expr      string `yaml:"expr"`
-	Duration  string `yaml:"duration"`
-	Severity  string `yaml:"severity"`
-	NotifyURL string `yaml:"notify_url"`
+	Name      string `yaml:"name" json:"name"`
+	Expr      string `yaml:"expr" json:"expr"`
+	Duration  string `yaml:"duration" json:"duration"`
+	Severity  string `yaml:"severity" json:"severity"`
+	NotifyURL string `yaml:"notify_url" json:"notify_url"`
 }
 
 type AgentConfig struct {
-	ListenAddr string `yaml:"listen_addr"`
-	Labels     map[string]string `yaml:"labels"`
+	ListenAddr string            `yaml:"listen_addr" json:"listen_addr"`
+	Labels     map[string]string `yaml:"labels" json:"labels"`
 }
 
 type I18nConfig struct {
-	Default string `yaml:"default"`
-	Supported []string `yaml:"supported"`
+	Default   string   `yaml:"default" json:"default"`
+	Supported []string `yaml:"supported" json:"supported"`
 }
 
 func DefaultConfig() *Config {
@@ -87,8 +87,8 @@ func DefaultConfig() *Config {
 			ListenAddr: "0.0.0.0:23391",
 		},
 		I18n: I18nConfig{
-			Default:    "zh-CN",
-			Supported:  []string{"zh-CN", "en-US", "ja-JP"},
+			Default:   "zh-CN",
+			Supported: []string{"zh-CN", "en-US", "ja-JP"},
 		},
 	}
 }

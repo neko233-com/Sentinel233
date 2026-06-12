@@ -1,0 +1,3 @@
+[submodule "libs/sentinel233-lib-go"]
+	path = libs/sentinel233-lib-go
+	url = https://github.com/neko233-com/sentinel233-lib-go.git

@@ -362,11 +362,12 @@ func (p *parser) parseAgg(op string) (Node, error) {
 	without := false
 	if p.pos < len(p.input) {
 		nextWord := p.peekWord()
-		if nextWord == "by" {
+		switch nextWord {
+		case "by":
 			p.pos += 2
 			p.skipSpace()
 			grouping, _ = p.parseGrouping()
-		} else if nextWord == "without" {
+		case "without":
 			p.pos += 7
 			p.skipSpace()
 			without = true
