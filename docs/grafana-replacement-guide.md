@@ -160,3 +160,30 @@ pwsh ./scripts/dashboard-migrate.ps1 `
 4. 将变更动作纳入版本化脚本（Git 仓库 + gh release 附件 + 变更记录）。
 
 该文档适用于：希望用单体式方式接管监控运维，而不是再维护一套“Grafana + 数据面多组件”架构的团队。
+
+## 本机 Agent 直控模式
+
+如果你的目标是“让本机 agent 或自动化运行时直接做图”，Sentinel233 现在原生预留了 loopback-only HTTP 控制面：
+
+- 路径前缀：`/api/local/v1/*`
+- 默认启用，但只允许 `127.0.0.1` / `::1`
+- 不需要人工登录或 token
+- 适合：
+  - 本地 agent 自动创建 dashboard
+  - Codex/脚本批量追加 panel
+  - 动态生成 `PromQL + SQL + ECharts` 面板
+
+推荐配置：
+
+```yaml
+local_api:
+  enabled: true
+  tenant_id: 1
+```
+
+推荐调用顺序：
+
+1. `GET /api/local/v1/capabilities`
+2. `POST /api/local/v1/dashboards` 或 `POST /api/local/v1/dashboards/import`
+3. `POST /api/local/v1/dashboards/{id}/panels`
+4. `GET /api/local/v1/dashboards/{id}` 获取最终面板结构

@@ -7,12 +7,13 @@ import (
 )
 
 type Config struct {
-	Server  ServerConfig  `yaml:"server" json:"server"`
-	Storage StorageConfig `yaml:"storage" json:"storage"`
-	Scrape  ScrapeConfig  `yaml:"scrape" json:"scrape"`
-	Alert   AlertConfig   `yaml:"alert" json:"alert"`
-	Agent   AgentConfig   `yaml:"agent" json:"agent"`
-	I18n    I18nConfig    `yaml:"i18n" json:"i18n"`
+	Server   ServerConfig   `yaml:"server" json:"server"`
+	Storage  StorageConfig  `yaml:"storage" json:"storage"`
+	Scrape   ScrapeConfig   `yaml:"scrape" json:"scrape"`
+	Alert    AlertConfig    `yaml:"alert" json:"alert"`
+	Agent    AgentConfig    `yaml:"agent" json:"agent"`
+	LocalAPI LocalAPIConfig `yaml:"local_api" json:"local_api"`
+	I18n     I18nConfig     `yaml:"i18n" json:"i18n"`
 }
 
 type ServerConfig struct {
@@ -58,6 +59,11 @@ type AgentConfig struct {
 	Labels     map[string]string `yaml:"labels" json:"labels"`
 }
 
+type LocalAPIConfig struct {
+	Enabled  bool  `yaml:"enabled" json:"enabled"`
+	TenantID int64 `yaml:"tenant_id" json:"tenant_id"`
+}
+
 type I18nConfig struct {
 	Default   string   `yaml:"default" json:"default"`
 	Supported []string `yaml:"supported" json:"supported"`
@@ -85,6 +91,10 @@ func DefaultConfig() *Config {
 		},
 		Agent: AgentConfig{
 			ListenAddr: "0.0.0.0:23391",
+		},
+		LocalAPI: LocalAPIConfig{
+			Enabled:  true,
+			TenantID: 1,
 		},
 		I18n: I18nConfig{
 			Default:   "zh-CN",

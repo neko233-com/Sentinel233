@@ -2,7 +2,7 @@
 
 All notable changes to Sentinel233 will be documented in this file.
 
-## [v0.2.2] - 2026-06-15
+## [v0.2.3] - 2026-06-15
 
 ### Added
 - Added operational documentation for replacing Grafana in production with Sentinel233.

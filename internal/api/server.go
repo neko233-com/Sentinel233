@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"net"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -96,6 +97,18 @@ func (s *Server) Router() chi.Router {
 	// Sentinel native ingestion API for first-party high-performance clients.
 	r.Get("/api/sentinel/v1/capabilities", s.handleSentinelCapabilities)
 	r.Post("/api/sentinel/v1/write", s.handleSentinelWrite)
+
+	// Loopback-only local agent API for zero-touch dashboard automation.
+	r.Route("/api/local/v1", func(r chi.Router) {
+		r.Use(s.localAgentMiddleware)
+		r.Get("/capabilities", s.handleLocalAgentCapabilities)
+		r.Get("/dashboards", s.handleListDashboards)
+		r.Post("/dashboards", s.handleLocalAgentCreateDashboard)
+		r.Post("/dashboards/import", s.handleLocalAgentImportDashboard)
+		r.Get("/dashboards/{id}", s.handleGetDashboard)
+		r.Put("/dashboards/{id}", s.handleLocalAgentUpdateDashboard)
+		r.Post("/dashboards/{id}/panels", s.handleLocalAgentAppendPanel)
+	})
 
 	// Tenant-scoped API (requires auth)
 	r.Route("/api/tenants", func(r chi.Router) {
@@ -232,6 +245,31 @@ func (s *Server) requireRole(minRole string, next http.HandlerFunc) http.Handler
 		ctx = context.WithValue(ctx, userRoleKey, info.Role)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	}
+}
+
+func (s *Server) localAgentMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.config == nil || !s.config.LocalAPI.Enabled {
+			s.jsonError(w, "local agent api disabled", http.StatusForbidden)
+			return
+		}
+		host, _, err := net.SplitHostPort(r.RemoteAddr)
+		if err != nil {
+			host = r.RemoteAddr
+		}
+		ip := net.ParseIP(strings.TrimSpace(host))
+		if ip == nil || !ip.IsLoopback() {
+			s.jsonError(w, "local agent api is only available from loopback addresses", http.StatusForbidden)
+			return
+		}
+		tenantID := s.config.LocalAPI.TenantID
+		if tenantID <= 0 {
+			tenantID = 1
+		}
+		ctx := context.WithValue(r.Context(), tenantIDKey, tenantID)
+		ctx = context.WithValue(ctx, userRoleKey, "admin")
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
 }
 
 func (s *Server) getTenantID(r *http.Request) int64 {
@@ -385,6 +423,7 @@ func (s *Server) handleCreateDashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d.TenantID = tenantID
+	normalizeDashboardRecord(&d)
 	if err := s.store.CreateDashboard(&d); err != nil {
 		s.jsonError(w, err.Error(), 500)
 		return
@@ -419,6 +458,7 @@ func (s *Server) handleImportDashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d.TenantID = tenantID
+	normalizeDashboardRecord(d)
 	if err := s.store.CreateDashboard(d); err != nil {
 		s.jsonError(w, err.Error(), 500)
 		return
@@ -464,11 +504,116 @@ func (s *Server) handleUpdateDashboard(w http.ResponseWriter, r *http.Request) {
 	}
 	d.ID = id
 	d.TenantID = tenantID
+	normalizeDashboardRecord(&d)
 	if err := s.store.UpdateDashboard(&d); err != nil {
 		s.jsonError(w, err.Error(), 500)
 		return
 	}
 	s.jsonOK(w, map[string]interface{}{"status": "success", "data": d})
+}
+
+func (s *Server) handleLocalAgentCapabilities(w http.ResponseWriter, r *http.Request) {
+	s.jsonOK(w, map[string]interface{}{
+		"status": "success",
+		"data": map[string]interface{}{
+			"mode":                    "loopback-only",
+			"tenantId":                s.getTenantID(r),
+			"dashboardImport":         true,
+			"dashboardCreate":         true,
+			"dashboardUpdate":         true,
+			"dashboardAppendPanel":    true,
+			"grafanaCompatibility":    true,
+			"queryModes":              []string{"promql", "sql"},
+			"renderers":               []string{"auto", "chartjs", "echarts", "table"},
+			"intendedAutomationUsers": []string{"local-agent", "codex", "assistant-runtime"},
+		},
+	})
+}
+
+func (s *Server) handleLocalAgentCreateDashboard(w http.ResponseWriter, r *http.Request) {
+	tenantID := s.getTenantID(r)
+	var payload map[string]json.RawMessage
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		s.jsonError(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	d, err := convertDashboardPayload(payload)
+	if err != nil {
+		s.jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	d.TenantID = tenantID
+	normalizeDashboardRecord(d)
+	if err := s.store.CreateDashboard(d); err != nil {
+		s.jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.jsonOK(w, map[string]interface{}{"status": "success", "data": d})
+}
+
+func (s *Server) handleLocalAgentImportDashboard(w http.ResponseWriter, r *http.Request) {
+	s.handleImportDashboard(w, r)
+}
+
+func (s *Server) handleLocalAgentUpdateDashboard(w http.ResponseWriter, r *http.Request) {
+	tenantID := s.getTenantID(r)
+	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	var payload map[string]json.RawMessage
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		s.jsonError(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	d, err := convertDashboardPayload(payload)
+	if err != nil {
+		s.jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	d.ID = id
+	d.TenantID = tenantID
+	normalizeDashboardRecord(d)
+	if err := s.store.UpdateDashboard(d); err != nil {
+		s.jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.jsonOK(w, map[string]interface{}{"status": "success", "data": d})
+}
+
+func (s *Server) handleLocalAgentAppendPanel(w http.ResponseWriter, r *http.Request) {
+	tenantID := s.getTenantID(r)
+	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	dash, err := s.store.GetDashboard(tenantID, id)
+	if err != nil {
+		s.jsonError(w, "dashboard not found", http.StatusNotFound)
+		return
+	}
+	var incoming map[string]interface{}
+	if err := json.NewDecoder(r.Body).Decode(&incoming); err != nil {
+		s.jsonError(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	var panels []map[string]interface{}
+	if err := json.Unmarshal([]byte(dash.Panels), &panels); err != nil || panels == nil {
+		panels = []map[string]interface{}{}
+	}
+	panel := normalizeDashboardPanel(incoming, len(panels))
+	panels = append(panels, panel)
+	panelsJSON, err := json.Marshal(panels)
+	if err != nil {
+		s.jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	dash.Panels = string(panelsJSON)
+	if err := s.store.UpdateDashboard(dash); err != nil {
+		s.jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.jsonOK(w, map[string]interface{}{
+		"status": "success",
+		"data": map[string]interface{}{
+			"dashboard": dash,
+			"panel":     panel,
+		},
+	})
 }
 
 func (s *Server) handleDeleteDashboard(w http.ResponseWriter, r *http.Request) {
@@ -935,6 +1080,93 @@ func firstNonEmptyString(values ...string) string {
 	return ""
 }
 
+func normalizeDashboardPanel(panel map[string]interface{}, index int) map[string]interface{} {
+	if panel == nil {
+		panel = map[string]interface{}{}
+	}
+	queryType := strings.ToLower(strings.TrimSpace(getString(panel["queryType"])))
+	if queryType == "" {
+		if sourceQuery := getString(panel["sourceQuery"]); sourceQuery != "" && sourceQuery != getString(panel["query"]) {
+			queryType = "sql"
+		} else {
+			queryType = "promql"
+		}
+	}
+	query := getString(panel["query"])
+	sourceQuery := getString(panel["sourceQuery"])
+	if queryType == "promql" && sourceQuery == "" {
+		sourceQuery = query
+	}
+	if queryType == "sql" && sourceQuery == "" {
+		sourceQuery = query
+	}
+	options, _ := cloneObject(panel["options"]).(map[string]interface{})
+	if options == nil {
+		options = map[string]interface{}{}
+	}
+	fieldConfig, _ := cloneObject(panel["fieldConfig"]).(map[string]interface{})
+	if fieldConfig == nil {
+		fieldConfig = map[string]interface{}{}
+	}
+	layout, ok := cloneObject(panel["layout"]).(map[string]interface{})
+	if !ok || layout == nil {
+		layout = map[string]interface{}{
+			"x": (index % 2) * 6,
+			"y": (index / 2) * 8,
+			"w": 6,
+			"h": 8,
+		}
+	}
+	grafanaMeta, _ := cloneObject(panel["grafana"]).(map[string]interface{})
+	renderer := getString(panel["renderer"])
+	if renderer == "" {
+		renderer = panelRenderer(getString(panel["type"]))
+	}
+	return map[string]interface{}{
+		"id":          coerceInt(panel["id"], index+1),
+		"title":       firstNonEmptyString(getString(panel["title"]), fmt.Sprintf("Panel %d", index+1)),
+		"description": getString(panel["description"]),
+		"type":        firstNonEmptyString(getString(panel["type"]), "timeseries"),
+		"queryType":   firstNonEmptyString(queryType, "promql"),
+		"query":       query,
+		"sourceQuery": sourceQuery,
+		"datasource":  cloneObject(panel["datasource"]),
+		"legend":      getString(panel["legend"]),
+		"unit":        getString(panel["unit"]),
+		"thresholds":  cloneObject(panel["thresholds"]),
+		"renderer":    renderer,
+		"options":     options,
+		"fieldConfig": fieldConfig,
+		"layout":      layout,
+		"grafana":     grafanaMeta,
+	}
+}
+
+func normalizeDashboardRecord(d *store.Dashboard) {
+	if d == nil {
+		return
+	}
+	var panels []map[string]interface{}
+	if err := json.Unmarshal([]byte(d.Panels), &panels); err == nil && panels != nil {
+		normalized := make([]map[string]interface{}, 0, len(panels))
+		for index, panel := range panels {
+			normalized = append(normalized, normalizeDashboardPanel(panel, index))
+		}
+		if bytes, err := json.Marshal(normalized); err == nil {
+			d.Panels = string(bytes)
+		}
+	}
+	if strings.TrimSpace(d.Layout) == "" {
+		d.Layout = "{}"
+	}
+	if strings.TrimSpace(d.Variables) == "" {
+		d.Variables = "[]"
+	}
+	if strings.TrimSpace(d.Tags) == "" {
+		d.Tags = "[]"
+	}
+}
+
 func cloneObject(value interface{}) interface{} {
 	if value == nil {
 		return nil
@@ -1132,6 +1364,7 @@ func layoutInt(layout map[string]interface{}, key string, defaultValue int) int 
 	default:
 		return defaultValue
 	}
+	return defaultValue
 }
 
 func coalesceTags(tags []string) []string {
@@ -1465,6 +1698,9 @@ func validateRuntimeConfig(cfg *config.Config) error {
 	}
 	if cfg.Scrape.Timeout <= 0 {
 		return fmt.Errorf("scrape timeout must be greater than 0")
+	}
+	if cfg.LocalAPI.TenantID <= 0 {
+		return fmt.Errorf("local api tenant id must be greater than 0")
 	}
 	for _, target := range cfg.Scrape.Targets {
 		if target.Name == "" || target.Endpoint == "" {

@@ -29,8 +29,8 @@ vim CHANGELOG.md
 4. 使用 `gh` 创建/更新 Release
 
 ```bash
-gh release create v0.2.2 \
-  --title "v0.2.2 - Grafana Compatibility, SQL Panels, and Migration Rehearsal" \
+gh release create v0.2.3 \
+  --title "v0.2.3 - Grafana Compatibility, Local Agent API, and Migration Rehearsal" \
   --notes-file docs/github-release-notes.md \
   --verify-tag
 ```
@@ -38,7 +38,7 @@ gh release create v0.2.2 \
 5. 给 Release 附件（可选）
 
 ```bash
-gh release upload v0.2.2 \
+gh release upload v0.2.3 \
   docs/grafana-replacement-guide.md \
   docs/integrations.md
 ```
@@ -49,14 +49,14 @@ gh release upload v0.2.2 \
 
 ```bash
 git status --short
-gh release view v0.2.2 >/dev/null && echo "release exists"
-git tag v0.2.2
-gh release create v0.2.2 \
-  --title "v0.2.2 - Grafana Compatibility, SQL Panels, and Migration Rehearsal" \
+gh release view v0.2.3 >/dev/null && echo "release exists"
+git tag v0.2.3
+gh release create v0.2.3 \
+  --title "v0.2.3 - Grafana Compatibility, Local Agent API, and Migration Rehearsal" \
   --notes-file docs/github-release-notes.md \
   --verify-tag \
   docs/grafana-replacement-guide.md docs/integrations.md
-gh release view v0.2.2 --json tagName,name,createdAt,author,url
+gh release view v0.2.3 --json tagName,name,createdAt,author,url
 ```
 
 ## 回滚建议
@@ -64,9 +64,9 @@ gh release view v0.2.2 --json tagName,name,createdAt,author,url
 如果本次发布存在问题，可在不改动代码历史的前提下快速回滚“发布层”：
 
 ```bash
-gh release delete v0.2.2 --yes
-git tag -d v0.2.2
-git push origin :refs/tags/v0.2.2
+gh release delete v0.2.3 --yes
+git tag -d v0.2.3
+git push origin :refs/tags/v0.2.3
 ```
 
 > 回滚动作仅影响 release 元数据；如需回滚代码，请重新发版新 tag 或还原对应代码提交并再发布新版本。
@@ -76,8 +76,8 @@ git push origin :refs/tags/v0.2.2
 如需自动触发正式构建，建议通过推送 tag 来触发仓库的 `Release` 工作流，再在 Release 中补充文档链接。
 
 ```bash
-git tag v0.2.2
-git push origin v0.2.2
+git tag v0.2.3
+git push origin v0.2.3
 ```
 
 CI 将在 `refs/tags/v*` 上执行 release 流程并产出制品，文档发布与二进制发布可分离进行。

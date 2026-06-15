@@ -20,6 +20,12 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.I18n.Default != "zh-CN" {
 		t.Fatalf("expected default lang zh-CN, got %s", cfg.I18n.Default)
 	}
+	if !cfg.LocalAPI.Enabled {
+		t.Fatal("expected local api enabled by default")
+	}
+	if cfg.LocalAPI.TenantID != 1 {
+		t.Fatalf("expected local api tenant 1, got %d", cfg.LocalAPI.TenantID)
+	}
 }
 
 func TestLoadNonExistent(t *testing.T) {

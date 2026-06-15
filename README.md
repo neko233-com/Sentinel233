@@ -111,6 +111,10 @@ alert:
       severity: "critical"
       notify_url: "https://your-webhook.url"
 
+local_api:
+  enabled: true
+  tenant_id: 1
+
 i18n:
   default: "zh-CN"
   supported: ["zh-CN", "en-US", "ja-JP"]
@@ -225,6 +229,57 @@ docker run -d -p 23390:23390 -p 23391:23391 -v sentinel233-data:/data sentinel23
 | `/api/dashboards/{id}` | PUT | 更新 |
 | `/api/dashboards/{id}` | DELETE | 删除 |
 
+### Local Agent API
+
+仅允许本机 `127.0.0.1` / `::1` 访问，目的是让本地 agent、自动化脚本或 Codex 运行时直接操控 dashboard，不需要人工登录拿 token。
+
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/api/local/v1/capabilities` | GET | 返回本机 agent 能力描述 |
+| `/api/local/v1/dashboards` | GET | 列出 dashboard |
+| `/api/local/v1/dashboards` | POST | 直接创建 dashboard |
+| `/api/local/v1/dashboards/import` | POST | 直接导入 Grafana 或 Sentinel dashboard JSON |
+| `/api/local/v1/dashboards/{id}` | GET | 获取 dashboard |
+| `/api/local/v1/dashboards/{id}` | PUT | 更新 dashboard |
+| `/api/local/v1/dashboards/{id}/panels` | POST | 追加单个 panel |
+
+示例：本机 agent 直接创建一个带 SQL 变换的 ECharts 面板
+
+```bash
+curl -X POST http://127.0.0.1:23390/api/local/v1/dashboards \
+  -H "Content-Type: application/json" \
+  -d '{
+    "title": "Agent Generated Dashboard",
+    "description": "Created by local agent",
+    "panels": [{
+      "title": "CPU TopN",
+      "type": "bar",
+      "queryType": "sql",
+      "sourceQuery": "rate(process_cpu_seconds_total[5m])",
+      "query": "SELECT series AS label, MAX(value) AS value, MAX(time) AS time FROM ? GROUP BY series ORDER BY value DESC LIMIT 10",
+      "renderer": "echarts"
+    }],
+    "layout": {},
+    "variables": [],
+    "tags": ["local-agent"]
+  }'
+```
+
+示例：给现有 dashboard 直接追加 panel
+
+```bash
+curl -X POST http://127.0.0.1:23390/api/local/v1/dashboards/1/panels \
+  -H "Content-Type: application/json" \
+  -d '{
+    "title": "Memory Usage",
+    "type": "timeseries",
+    "queryType": "promql",
+    "query": "process_resident_memory_bytes",
+    "renderer": "echarts",
+    "unit": "bytes"
+  }'
+```
+
 ### 系统 API
 
 | 端点 | 方法 | 说明 |
@@ -310,6 +365,7 @@ sentinel233-agent [flags]
 - 新增面板时可选择：
   - `PromQL 直出`：适合普通监控曲线、表格、Gauge、Stat。
   - `PromQL + SQL 变换`：先拉 PromQL 样本点，再用 SQL（`FROM ?`）聚合、排序、透视，最后交给 `ECharts` 或表格渲染。
+- 如果要让本机 agent 零人工快速做图，优先使用 `Local Agent API`，它天然跳过登录 token，但只接受 loopback 请求。
 - 生产批量迁移演练可使用：
 
 ```powershell
