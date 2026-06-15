@@ -109,9 +109,11 @@ func (s *Server) Router() chi.Router {
 	// Dashboard API (tenant-scoped)
 	r.Route("/api/dashboards", func(r chi.Router) {
 		r.Use(s.tenantMiddleware)
+		r.Post("/import", s.requireRole("operator", s.handleImportDashboard))
 		r.Get("/", s.handleListDashboards)
 		r.Post("/", s.requireRole("operator", s.handleCreateDashboard))
 		r.Get("/{id}", s.handleGetDashboard)
+		r.Get("/{id}/export", s.requireRole("viewer", s.handleExportDashboard))
 		r.Put("/{id}", s.requireRole("operator", s.handleUpdateDashboard))
 		r.Delete("/{id}", s.requireRole("admin", s.handleDeleteDashboard))
 	})
@@ -390,6 +392,57 @@ func (s *Server) handleCreateDashboard(w http.ResponseWriter, r *http.Request) {
 	s.jsonOK(w, map[string]interface{}{"status": "success", "data": d})
 }
 
+func (s *Server) handleImportDashboard(w http.ResponseWriter, r *http.Request) {
+	tenantID := s.getTenantID(r)
+	var payload map[string]json.RawMessage
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		s.jsonError(w, "invalid import payload", 400)
+		return
+	}
+	if nested, ok := payload["dashboard"]; ok {
+		var nestedMap map[string]json.RawMessage
+		if err := json.Unmarshal(nested, &nestedMap); err == nil {
+			payload = nestedMap
+		}
+	}
+
+	source := strings.TrimSpace(strings.ToLower(stringFromRaw(payload["source"])))
+	var d *store.Dashboard
+	var err error
+	if source == "grafana" || looksLikeGrafanaDashboard(payload) {
+		d, err = convertGrafanaPayloadToDashboard(payload)
+	} else {
+		d, err = convertDashboardPayload(payload)
+	}
+	if err != nil {
+		s.jsonError(w, err.Error(), 400)
+		return
+	}
+	d.TenantID = tenantID
+	if err := s.store.CreateDashboard(d); err != nil {
+		s.jsonError(w, err.Error(), 500)
+		return
+	}
+	s.jsonOK(w, map[string]interface{}{"status": "success", "data": d})
+}
+
+func (s *Server) handleExportDashboard(w http.ResponseWriter, r *http.Request) {
+	tenantID := s.getTenantID(r)
+	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	dash, err := s.store.GetDashboard(tenantID, id)
+	if err != nil {
+		s.jsonError(w, "dashboard not found", 404)
+		return
+	}
+
+	exported, err := convertDashboardToGrafanaExport(dash)
+	if err != nil {
+		s.jsonError(w, err.Error(), 500)
+		return
+	}
+	s.jsonOK(w, map[string]interface{}{"status": "success", "data": exported})
+}
+
 func (s *Server) handleGetDashboard(w http.ResponseWriter, r *http.Request) {
 	tenantID := s.getTenantID(r)
 	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
@@ -426,6 +479,737 @@ func (s *Server) handleDeleteDashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.jsonOK(w, map[string]interface{}{"status": "success"})
+}
+
+type grafanaImportTarget struct {
+	Expr         string `json:"expr"`
+	Query        string `json:"query"`
+	LegendFormat string `json:"legendFormat"`
+	Alias        string `json:"alias"`
+}
+
+type grafanaImportVariable struct {
+	Name       string      `json:"name"`
+	Label      string      `json:"label"`
+	Type       string      `json:"type"`
+	Query      string      `json:"query"`
+	Current    interface{} `json:"current"`
+	Options    interface{} `json:"options"`
+	IncludeAll bool        `json:"includeAll"`
+	Multi      bool        `json:"multi"`
+}
+
+type grafanaImportPanel struct {
+	ID              int                    `json:"id"`
+	Type            string                 `json:"type"`
+	Title           string                 `json:"title"`
+	Targets         []grafanaImportTarget  `json:"targets"`
+	GridPos         map[string]interface{} `json:"gridPos"`
+	Datasource      interface{}            `json:"datasource"`
+	FieldConfig     map[string]interface{} `json:"fieldConfig"`
+	Options         map[string]interface{} `json:"options"`
+	Legend          string                 `json:"legend"`
+	Transformations []interface{}          `json:"transformations"`
+	Panels          []grafanaImportPanel   `json:"panels"`
+}
+
+type grafanaImportPayload struct {
+	Title         string                 `json:"title"`
+	Description   string                 `json:"description"`
+	UID           string                 `json:"uid"`
+	SchemaVersion int                    `json:"schemaVersion"`
+	Tags          []string               `json:"tags"`
+	Time          map[string]interface{} `json:"time"`
+	Panels        []grafanaImportPanel   `json:"panels"`
+	Templating    struct {
+		List []grafanaImportVariable `json:"list"`
+	} `json:"templating"`
+}
+
+var grafanaPanelTypeMap = map[string]string{
+	"graph":      "timeseries",
+	"timeseries": "timeseries",
+	"stat":       "stat",
+	"gauge":      "gauge",
+	"table":      "table",
+	"barchart":   "bar",
+	"bar":        "bar",
+	"bargauge":   "bar",
+	"heatmap":    "heatmap",
+}
+
+var reverseGrafanaTypeMap = map[string]string{
+	"timeseries": "timeseries",
+	"stat":       "stat",
+	"gauge":      "gauge",
+	"table":      "table",
+	"bar":        "barchart",
+	"histogram":  "histogram",
+	"heatmap":    "heatmap",
+}
+
+func looksLikeGrafanaDashboard(payload map[string]json.RawMessage) bool {
+	_, hasSchema := payload["schemaVersion"]
+	_, hasTemplating := payload["templating"]
+	_, hasPanels := payload["panels"]
+	if !hasPanels {
+		return false
+	}
+	if hasSchema || hasTemplating {
+		return true
+	}
+	var panelValue interface{}
+	if err := json.Unmarshal(payload["panels"], &panelValue); err == nil {
+		if _, ok := panelValue.([]interface{}); ok {
+			return true
+		}
+	}
+	return false
+}
+
+func convertDashboardPayload(payload map[string]json.RawMessage) (*store.Dashboard, error) {
+	title := strings.TrimSpace(stringFromRaw(payload["title"]))
+	if title == "" {
+		title = "Imported Dashboard"
+	}
+	description := strings.TrimSpace(stringFromRaw(payload["description"]))
+	panelsJSON := ensureJSONString(payload["panels"], "[]")
+	layoutJSON := ensureJSONString(payload["layout"], "{}")
+	variablesJSON := ensureJSONString(payload["variables"], "[]")
+	tagsJSON := ensureJSONString(payload["tags"], "[]")
+	return &store.Dashboard{
+		Title:       title,
+		Description: description,
+		Panels:      panelsJSON,
+		Layout:      layoutJSON,
+		Variables:   variablesJSON,
+		Tags:        tagsJSON,
+	}, nil
+}
+
+func convertGrafanaPayloadToDashboard(payload map[string]json.RawMessage) (*store.Dashboard, error) {
+	var gDashboard grafanaImportPayload
+	if err := json.Unmarshal(toJSONBytes(payload), &gDashboard); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(gDashboard.Title) == "" {
+		gDashboard.Title = "Imported Grafana Dashboard"
+	}
+	compatibility := buildGrafanaCompatibilityReport(gDashboard.Panels)
+	compatibilityByID := make(map[int]map[string]interface{}, len(compatibility.Panels))
+	for _, panel := range compatibility.Panels {
+		compatibilityByID[panel.ID] = panel.toMap()
+	}
+	convertedPanels := make([]map[string]interface{}, 0)
+	for idx, panel := range flattenGrafanaPanels(gDashboard.Panels) {
+		target := firstGrafanaTarget(panel.Targets)
+		panelType := mapGrafanaPanelType(panel.Type)
+		unit := ""
+		panelID := coerceInt(panel.ID, idx+1)
+		thresholds := interface{}([]interface{}{})
+		if panel.FieldConfig != nil {
+			if defaults, ok := panel.FieldConfig["defaults"].(map[string]interface{}); ok {
+				if v, ok := defaults["unit"].(string); ok {
+					unit = v
+				}
+				if v, ok := defaults["thresholds"].(map[string]interface{}); ok {
+					if s, ok := v["steps"]; ok {
+						thresholds = s
+					}
+				}
+			}
+		}
+		legend := panel.Legend
+		if legend == "" && target != nil {
+			legend = target.LegendFormat
+			if legend == "" {
+				legend = target.Alias
+			}
+		}
+		query := ""
+		if target != nil {
+			query = target.Expr
+			if query == "" {
+				query = target.Query
+			}
+		}
+		convertedPanels = append(convertedPanels, map[string]interface{}{
+			"id":          panelID,
+			"title":       panelTitle(panel.Title, "Grafana Panel"),
+			"type":        panelType,
+			"queryType":   "promql",
+			"query":       query,
+			"sourceQuery": query,
+			"datasource":  panel.Datasource,
+			"legend":      legend,
+			"unit":        unit,
+			"thresholds":  thresholds,
+			"renderer":    firstNonEmptyString(panelRenderer(panelType), "chartjs"),
+			"options":     cloneObject(panel.Options),
+			"fieldConfig": cloneObject(panel.FieldConfig),
+			"layout":      cloneObject(panel.GridPos),
+			"grafana": map[string]interface{}{
+				"id":              panelID,
+				"type":            panel.Type,
+				"targets":         cloneTargets(panel.Targets),
+				"transformations": cloneObject(panel.Transformations),
+				"compatibility":   compatibilityByID[panelID],
+			},
+		})
+	}
+	panelsJSON, err := json.Marshal(convertedPanels)
+	if err != nil {
+		return nil, err
+	}
+	variables := make([]map[string]interface{}, 0, len(gDashboard.Templating.List))
+	for _, variable := range gDashboard.Templating.List {
+		variables = append(variables, map[string]interface{}{
+			"name":       variable.Name,
+			"label":      variable.Label,
+			"type":       variable.Type,
+			"query":      variable.Query,
+			"current":    variable.Current,
+			"options":    variable.Options,
+			"includeAll": variable.IncludeAll,
+			"multi":      variable.Multi,
+		})
+	}
+	variablesJSON, err := json.Marshal(variables)
+	if err != nil {
+		return nil, err
+	}
+	layout := map[string]interface{}{
+		"schemaVersion": gDashboard.SchemaVersion,
+		"uid":           gDashboard.UID,
+		"time":          gDashboard.Time,
+		"compatibility": compatibility.toMap(),
+	}
+	if len(layout) == 0 || isEmptyLayout(layout) {
+		layout = map[string]interface{}{}
+	}
+	layoutJSON, err := json.Marshal(layout)
+	if err != nil {
+		return nil, err
+	}
+	tags := gDashboard.Tags
+	if len(tags) == 0 {
+		tags = []string{"grafana-import"}
+	}
+	tagsJSON, err := json.Marshal(tags)
+	if err != nil {
+		return nil, err
+	}
+	description := strings.TrimSpace(gDashboard.Description)
+	if description == "" {
+		description = "Imported from Grafana dashboard"
+	}
+	return &store.Dashboard{
+		Title:       gDashboard.Title,
+		Description: description,
+		Panels:      string(panelsJSON),
+		Layout:      string(layoutJSON),
+		Variables:   string(variablesJSON),
+		Tags:        string(tagsJSON),
+	}, nil
+}
+
+func convertDashboardToGrafanaExport(dash *store.Dashboard) (map[string]interface{}, error) {
+	var layout map[string]interface{}
+	if err := json.Unmarshal([]byte(dash.Layout), &layout); err != nil || layout == nil {
+		layout = map[string]interface{}{}
+	}
+	var panels []map[string]interface{}
+	if err := json.Unmarshal([]byte(dash.Panels), &panels); err != nil {
+		panels = []map[string]interface{}{}
+	}
+	var variables []map[string]interface{}
+	if err := json.Unmarshal([]byte(dash.Variables), &variables); err != nil {
+		variables = []map[string]interface{}{}
+	}
+	var tags []string
+	if err := json.Unmarshal([]byte(dash.Tags), &tags); err != nil {
+		tags = []string{}
+	}
+	exportPanels := make([]map[string]interface{}, 0, len(panels))
+	for index, panel := range panels {
+		panelType := panel["grafana"]
+		grafanaType := mapGrafanaTypeForExport(panelType, getString(panel["type"]))
+		gridPos := panel["layout"]
+		query := panelSourceQuery(panel)
+		targets := extractGrafanaTargets(panel["grafana"], query)
+		if len(targets) == 0 && query != "" {
+			targets = append(targets, map[string]interface{}{
+				"refId":        "A",
+				"expr":         query,
+				"legendFormat": getString(panel["legend"]),
+			})
+		}
+		if len(targets) == 0 {
+			targets = []map[string]interface{}{{"refId": "A", "expr": query}}
+		}
+		rawGrafana, _ := panelType.(map[string]interface{})
+		transformations := extractTransformations(rawGrafana)
+		if transformations == nil {
+			transformations = extractTransformations(panel["transformations"])
+		}
+		exportPanels = append(exportPanels, map[string]interface{}{
+			"id":              coerceInt(panel["id"], index+1),
+			"title":           getString(panel["title"]),
+			"type":            grafanaType,
+			"gridPos":         normalizeGridPos(gridPos, index),
+			"datasource":      panel["datasource"],
+			"fieldConfig":     panelFieldConfig(panel["fieldConfig"], getString(panel["unit"])),
+			"options":         cloneObject(panel["options"]),
+			"targets":         targets,
+			"transformations": transformations,
+		})
+	}
+	export := map[string]interface{}{
+		"title":         dash.Title,
+		"uid":           getString(layout["uid"]),
+		"schemaVersion": layoutInt(layout, "schemaVersion", 39),
+		"tags":          coalesceTags(tags),
+		"timezone":      "browser",
+		"time":          firstNonNil(layout["time"], map[string]interface{}{"from": "now-24h", "to": "now"}),
+		"templating":    map[string]interface{}{"list": variables},
+		"panels":        exportPanels,
+	}
+	if getString(export["uid"]) == "" {
+		export["uid"] = fmt.Sprintf("sentinel-%d", dash.ID)
+	}
+	return export, nil
+}
+
+func mapGrafanaPanelType(rawType string) string {
+	raw := strings.ToLower(strings.TrimSpace(rawType))
+	if mapped, ok := grafanaPanelTypeMap[raw]; ok {
+		return mapped
+	}
+	if raw == "" {
+		return "timeseries"
+	}
+	return raw
+}
+
+func mapGrafanaTypeForExport(grafanaRaw interface{}, fallback string) string {
+	grafanaType := ""
+	if m, ok := grafanaRaw.(map[string]interface{}); ok {
+		grafanaType = getString(m["type"])
+	}
+	if grafanaType == "" {
+		grafanaType = fallback
+	}
+	if mapped, ok := reverseGrafanaTypeMap[strings.ToLower(strings.TrimSpace(grafanaType))]; ok {
+		return mapped
+	}
+	return strings.ToLower(strings.TrimSpace(grafanaType))
+}
+
+type grafanaCompatibilityReport struct {
+	TotalPanels      int
+	FullySupported   int
+	PartiallySupport int
+	Unsupported      int
+	TotalWarnings    int
+	Panels           []grafanaPanelCompatibility
+}
+
+type grafanaPanelCompatibility struct {
+	ID          int
+	Title       string
+	GrafanaType string
+	MappedType  string
+	Warnings    []string
+}
+
+func buildGrafanaCompatibilityReport(panels []grafanaImportPanel) grafanaCompatibilityReport {
+	flattened := flattenGrafanaPanels(panels)
+	report := grafanaCompatibilityReport{
+		TotalPanels: len(flattened),
+		Panels:      make([]grafanaPanelCompatibility, 0, len(flattened)),
+	}
+	for idx, panel := range flattened {
+		item := buildGrafanaPanelCompatibility(panel, idx)
+		if len(item.Warnings) == 0 {
+			report.FullySupported++
+		} else if item.MappedType != "" {
+			report.PartiallySupport++
+		} else {
+			report.Unsupported++
+		}
+		report.TotalWarnings += len(item.Warnings)
+		report.Panels = append(report.Panels, item)
+	}
+	return report
+}
+
+func buildGrafanaPanelCompatibility(panel grafanaImportPanel, index int) grafanaPanelCompatibility {
+	mappedType := mapGrafanaPanelType(panel.Type)
+	item := grafanaPanelCompatibility{
+		ID:          coerceInt(panel.ID, index+1),
+		Title:       panelTitle(panel.Title, "Grafana Panel"),
+		GrafanaType: firstNonEmptyString(panel.Type, "unknown"),
+		MappedType:  mappedType,
+		Warnings:    []string{},
+	}
+	if _, ok := grafanaPanelTypeMap[strings.ToLower(strings.TrimSpace(panel.Type))]; !ok {
+		if !isBuiltInSentinelPanelType(mappedType) {
+			item.Warnings = append(item.Warnings, fmt.Sprintf("panel type %q requires manual verification", item.GrafanaType))
+		}
+	}
+	if len(panel.Targets) > 1 {
+		item.Warnings = append(item.Warnings, "multiple targets detected; runtime currently renders the first target directly")
+	}
+	if len(panel.Transformations) > 0 {
+		item.Warnings = append(item.Warnings, "grafana transformations are preserved as metadata and may need manual recreation")
+	}
+	if _, ok := panel.Datasource.(map[string]interface{}); ok {
+		item.Warnings = append(item.Warnings, "datasource uses a complex object and should be reviewed after import")
+	}
+	return item
+}
+
+func (r grafanaCompatibilityReport) toMap() map[string]interface{} {
+	panels := make([]map[string]interface{}, 0, len(r.Panels))
+	for _, panel := range r.Panels {
+		panels = append(panels, panel.toMap())
+	}
+	return map[string]interface{}{
+		"totalPanels":       r.TotalPanels,
+		"fullySupported":    r.FullySupported,
+		"partiallySupported": r.PartiallySupport,
+		"unsupported":       r.Unsupported,
+		"totalWarnings":     r.TotalWarnings,
+		"panels":            panels,
+	}
+}
+
+func (p grafanaPanelCompatibility) toMap() map[string]interface{} {
+	return map[string]interface{}{
+		"id":          p.ID,
+		"title":       p.Title,
+		"grafanaType": p.GrafanaType,
+		"mappedType":  p.MappedType,
+		"warnings":    p.Warnings,
+	}
+}
+
+func panelSourceQuery(panel map[string]interface{}) string {
+	if strings.EqualFold(getString(panel["queryType"]), "sql") {
+		if source := getString(panel["sourceQuery"]); source != "" {
+			return source
+		}
+	}
+	if source := getString(panel["sourceQuery"]); source != "" && getString(panel["query"]) == "" {
+		return source
+	}
+	return getString(panel["query"])
+}
+
+func panelRenderer(panelType string) string {
+	switch strings.ToLower(strings.TrimSpace(panelType)) {
+	case "table":
+		return "table"
+	case "heatmap", "pie", "scatter":
+		return "echarts"
+	default:
+		return "chartjs"
+	}
+}
+
+func isBuiltInSentinelPanelType(panelType string) bool {
+	switch strings.ToLower(strings.TrimSpace(panelType)) {
+	case "timeseries", "stat", "gauge", "table", "bar", "pie", "scatter", "heatmap":
+		return true
+	default:
+		return false
+	}
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func cloneObject(value interface{}) interface{} {
+	if value == nil {
+		return nil
+	}
+	bytes, err := json.Marshal(value)
+	if err != nil {
+		return value
+	}
+	var cloned interface{}
+	if err := json.Unmarshal(bytes, &cloned); err != nil {
+		return value
+	}
+	return cloned
+}
+
+func cloneTargets(targets []grafanaImportTarget) []grafanaImportTarget {
+	cloned := make([]grafanaImportTarget, len(targets))
+	copy(cloned, targets)
+	return cloned
+}
+
+func firstGrafanaTarget(targets []grafanaImportTarget) *grafanaImportTarget {
+	if len(targets) == 0 {
+		return nil
+	}
+	return &targets[0]
+}
+
+func panelTitle(title, fallback string) string {
+	if strings.TrimSpace(title) == "" {
+		return fallback
+	}
+	return title
+}
+
+func flattenGrafanaPanels(panels []grafanaImportPanel) []grafanaImportPanel {
+	var result []grafanaImportPanel
+	for _, panel := range panels {
+		if strings.EqualFold(panel.Type, "row") && len(panel.Panels) > 0 {
+			result = append(result, flattenGrafanaPanels(panel.Panels)...)
+			continue
+		}
+		result = append(result, panel)
+	}
+	return result
+}
+
+func extractTransformations(panel interface{}) []map[string]interface{} {
+	if panel == nil {
+		return nil
+	}
+	switch source := panel.(type) {
+	case map[string]interface{}:
+		transformRaw, ok := source["transformations"]
+		if !ok {
+			return nil
+		}
+		return parseTransformationsValue(transformRaw)
+	default:
+		return parseTransformationsValue(source)
+	}
+}
+
+func parseTransformationsValue(raw interface{}) []map[string]interface{} {
+	switch source := raw.(type) {
+	case []interface{}:
+		result := make([]map[string]interface{}, 0, len(source))
+		for _, item := range source {
+			transform, ok := item.(map[string]interface{})
+			if ok {
+				cloned := cloneObject(transform)
+				if cloneMap, ok := cloned.(map[string]interface{}); ok {
+					result = append(result, cloneMap)
+				}
+			}
+		}
+		return result
+	default:
+		return nil
+	}
+}
+
+func extractGrafanaTargets(grafanaRaw interface{}, query string) []map[string]interface{} {
+	var targets []map[string]interface{}
+	grafanaMap, ok := grafanaRaw.(map[string]interface{})
+	if !ok || grafanaMap == nil {
+		return targets
+	}
+	raw, ok := grafanaMap["targets"]
+	if !ok {
+		return targets
+	}
+	switch source := raw.(type) {
+	case []interface{}:
+		for _, item := range source {
+			if target, ok := item.(map[string]interface{}); ok {
+				targets = append(targets, target)
+			}
+		}
+	}
+	if len(targets) > 0 {
+		return targets
+	}
+	if strings.TrimSpace(query) != "" {
+		targets = append(targets, map[string]interface{}{"expr": query, "refId": "A"})
+	}
+	return targets
+}
+
+func coerceInt(v interface{}, fallback int) int {
+	switch num := v.(type) {
+	case int:
+		return num
+	case int8:
+		return int(num)
+	case int16:
+		return int(num)
+	case int32:
+		return int(num)
+	case int64:
+		return int(num)
+	case uint:
+		return int(num)
+	case uint8:
+		return int(num)
+	case uint16:
+		return int(num)
+	case uint32:
+		return int(num)
+	case uint64:
+		return int(num)
+	case float32:
+		return int(num)
+	case float64:
+		return int(num)
+	case json.Number:
+		if n, err := num.Int64(); err == nil {
+			return int(n)
+		}
+		return fallback
+	case string:
+		if parsed, err := strconv.Atoi(strings.TrimSpace(num)); err == nil {
+			return parsed
+		}
+		return fallback
+	default:
+		return fallback
+	}
+}
+
+func panelFieldConfig(raw interface{}, unit string) map[string]interface{} {
+	cfg := cloneObject(raw)
+	config, ok := cfg.(map[string]interface{})
+	if !ok {
+		config = map[string]interface{}{}
+	}
+	if _, ok := config["defaults"]; !ok {
+		if unit != "" {
+			config["defaults"] = map[string]interface{}{
+				"unit": unit,
+			}
+		}
+	}
+	return config
+}
+
+func normalizeGridPos(raw interface{}, index int) map[string]interface{} {
+	if grid, ok := raw.(map[string]interface{}); ok {
+		return grid
+	}
+	return map[string]interface{}{
+		"x": (index % 2) * 12,
+		"y": (index / 2) * 8,
+		"w": 12,
+		"h": 8,
+	}
+}
+
+func layoutInt(layout map[string]interface{}, key string, defaultValue int) int {
+	switch v := layout[key].(type) {
+	case int:
+		return v
+	case int64:
+		return int(v)
+	case int32:
+		return int(v)
+	case float64:
+		return int(v)
+	case float32:
+		return int(v)
+	case json.Number:
+		if i, err := v.Int64(); err == nil {
+			return int(i)
+		}
+	default:
+		return defaultValue
+	}
+}
+
+func coalesceTags(tags []string) []string {
+	if len(tags) == 0 {
+		return []string{"sentinel-export"}
+	}
+	return tags
+}
+
+func stringFromRaw(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var v interface{}
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return ""
+	}
+	if v == nil {
+		return ""
+	}
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return fmt.Sprint(v)
+}
+
+func ensureJSONString(raw json.RawMessage, fallback string) string {
+	if len(raw) == 0 {
+		return fallback
+	}
+	var decoded interface{}
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return fallback
+	}
+	switch v := decoded.(type) {
+	case string:
+		if strings.TrimSpace(v) == "" {
+			return fallback
+		}
+		return v
+	default:
+		bytes, err := json.Marshal(decoded)
+		if err != nil {
+			return fallback
+		}
+		return string(bytes)
+	}
+}
+
+func toJSONBytes(payload map[string]json.RawMessage) []byte {
+	data, _ := json.Marshal(payload)
+	return data
+}
+
+func getString(v interface{}) string {
+	switch value := v.(type) {
+	case nil:
+		return ""
+	case string:
+		return value
+	case float64:
+		return strconv.FormatFloat(value, 'f', -1, 64)
+	case int:
+		return strconv.Itoa(value)
+	default:
+		return fmt.Sprint(v)
+	}
+}
+
+func firstNonNil(v interface{}, fallback map[string]interface{}) map[string]interface{} {
+	if value, ok := v.(map[string]interface{}); ok && value != nil {
+		return value
+	}
+	return fallback
+}
+
+func isEmptyLayout(layout map[string]interface{}) bool {
+	return len(layout) == 0
 }
 
 // ============ Targets handlers ============

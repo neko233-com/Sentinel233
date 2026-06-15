@@ -15,8 +15,10 @@
 | **Scrape 采集** | 拉模式采集 + OpenMetrics 解析 + 动态目标管理 |
 | **常用集成预设** | Go、JVM、MySQL、PostgreSQL、Redis、Nginx、Linux node_exporter、Docker/cAdvisor、Kubernetes、Blackbox |
 | **告警引擎** | 规则评估 + pending→firing 状态机 + Webhook 通知 |
-| **Grafana 风格 UI** | 暗色主题 SPA、Chart.js 可视化、时间序列图/仪表盘/统计值/表格 |
-| **Dashboard 管理** | 创建/编辑/删除仪表盘、动态添加面板 |
+| **独立实现的可落地监控系统** | 一体化的采集、存储、查询、告警、面板与权限体系（无外部依赖）；UI 视觉上借鉴 Grafana 的操作便捷性，但实现链路与数据模型与其不同 |
+| **Dashboard 管理** | 创建/编辑/删除仪表盘、Grafana 导入导出、兼容性预检、动态添加面板 |
+| **可视化运行时** | Chart.js + ECharts 双渲染器，支持更贴近 Grafana 的图表效果 |
+| **数据变换** | 面板支持 `PromQL` 直出或 `PromQL + SQL` 变换，用于 ECharts 绘制与聚合透视 |
 | **i18n 国际化** | 中文 / English / 日本語，默认支持 3 语言 |
 | **轻量 Agent** | 内置 Go runtime 指标采集 (CPU/内存/goroutine)，一键部署 |
 | **SQLite 元数据** | Dashboard、用户、设置持久化，纯 Go 无 CGO 依赖 |
@@ -217,7 +219,9 @@ docker run -d -p 23390:23390 -p 23391:23391 -v sentinel233-data:/data sentinel23
 |------|------|------|
 | `/api/dashboards` | GET | 列表 |
 | `/api/dashboards` | POST | 创建 |
+| `/api/dashboards/import` | POST | 导入 Grafana JSON 或标准面板 JSON |
 | `/api/dashboards/{id}` | GET | 详情 |
+| `/api/dashboards/{id}/export` | GET | 导出 Grafana JSON |
 | `/api/dashboards/{id}` | PUT | 更新 |
 | `/api/dashboards/{id}` | DELETE | 删除 |
 
@@ -250,6 +254,7 @@ docker run -d -p 23390:23390 -p 23391:23391 -v sentinel233-data:/data sentinel23
 | `scripts/install.sh` | Linux/macOS Agent 安装 |
 | `scripts/install-server.ps1` | Windows Server 安装 |
 | `scripts/install-server.sh` | Linux/macOS Server 安装 |
+| `scripts/dashboard-migrate.ps1` | 批量导入 Grafana dashboard、导出归档并生成校验报告 |
 
 ## 开发
 
@@ -293,6 +298,30 @@ sentinel233-agent [flags]
 |------|------|
 | [CHANGELOG.md](CHANGELOG.md) | 版本变更记录 |
 | [configs/sentinel233.yaml.example](configs/sentinel233.yaml.example) | 配置文件示例 |
+| [docs/integrations.md](docs/integrations.md) | 接入与采集方式说明 |
+| [docs/grafana-replacement-guide.md](docs/grafana-replacement-guide.md) | 从 Grafana 迁移到 Sentinel233 的落地指南 |
+| [docs/github-release-guide.md](docs/github-release-guide.md) | 使用 `gh` 进行发布与文档发布流程 |
+| [docs/github-release-notes.md](docs/github-release-notes.md) | 本次发布说明与可直接发布的 release notes |
+
+## Grafana 迁移与 SQL/ECharts 面板
+
+- 导入 Grafana JSON 前，Web UI 会先给出兼容性摘要，提示多 target、transformations、复杂 datasource 等需人工复核项。
+- 导入后的面板默认保留原始 Grafana 元信息，并优先用 `ECharts` 贴近原可视化观感。
+- 新增面板时可选择：
+  - `PromQL 直出`：适合普通监控曲线、表格、Gauge、Stat。
+  - `PromQL + SQL 变换`：先拉 PromQL 样本点，再用 SQL（`FROM ?`）聚合、排序、透视，最后交给 `ECharts` 或表格渲染。
+- 生产批量迁移演练可使用：
+
+```powershell
+pwsh ./scripts/dashboard-migrate.ps1 `
+  -BaseUrl "http://127.0.0.1:23390" `
+  -Tenant "default" `
+  -Username "root" `
+  -Password "root" `
+  -ImportDir ".\\grafana-dashboards" `
+  -ArchiveDir ".\\artifacts\\dashboard-exports" `
+  -SummaryFile ".\\artifacts\\dashboard-migration-report.json"
+```
 
 ## GitHub Actions
 

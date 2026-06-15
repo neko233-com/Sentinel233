@@ -2,6 +2,23 @@
 
 All notable changes to Sentinel233 will be documented in this file.
 
+## [v0.2.2] - 2026-06-15
+
+### Added
+- Added operational documentation for replacing Grafana in production with Sentinel233.
+- Added migration guide (`docs/grafana-replacement-guide.md`) covering capability matrix, rollout plan, and acceptance checklist.
+- Added GitHub release playbook (`docs/github-release-guide.md`) and release notes (`docs/github-release-notes.md`) for `gh`-based publishing.
+- Added dashboard migration rehearsal script (`scripts/dashboard-migrate.ps1`) for batch import, export archiving, and validation summaries.
+- Clarified integration docs with an explicit Grafana migration workflow.
+- Added SQL-transformed dashboard panels and ECharts renderer support for closer Grafana visual parity.
+
+### Changed
+- Enhanced Grafana dashboard import/export metadata so imported panels retain compatibility warnings, source PromQL, and renderer hints.
+- Improved dashboard authoring UX with clearer query mode, renderer, and panel configuration semantics.
+
+### Docs
+- Updated README documentation index to include new operational and release documents.
+
 ## [v0.1.0] - 2026-06-11
 
 ### Added

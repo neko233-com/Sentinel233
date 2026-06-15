@@ -192,6 +192,8 @@ const grafanaTypeMap = {
   barchart: 'bar',
   bargauge: 'bar',
   heatmap: 'heatmap',
+  piechart: 'pie',
+  histogram: 'bar',
 };
 
 const configPresets = {
@@ -388,7 +390,10 @@ function closeModal() {
 }
 
 function destroyCharts() {
-  Object.values(charts).forEach(chart => chart.destroy());
+  Object.values(charts).forEach(chart => {
+    if (chart?.destroy) chart.destroy();
+    if (chart?.dispose) chart.dispose();
+  });
   charts = {};
 }
 
@@ -467,7 +472,11 @@ function labelsToString(metric, index) {
 }
 
 function latestRows(data) {
-  return normalizeSeries(data).map(series => {
+  return latestRowsFromSeries(normalizeSeries(data));
+}
+
+function latestRowsFromSeries(seriesList) {
+  return (seriesList || []).map(series => {
     const latest = [...series.values].reverse().find(point => Number.isFinite(point[1]));
     return {
       label: series.label,
@@ -475,6 +484,425 @@ function latestRows(data) {
       time: latest ? latest[0] : null,
     };
   });
+}
+
+function normalizePanelDefinition(panel = {}, index = 0) {
+  const queryType = panel.queryType || ((panel.sourceQuery && panel.sourceQuery !== panel.query) ? 'sql' : 'promql');
+  const options = { ...(panel.options || {}) };
+  if (typeof options.echarts === 'string') options.echarts = safeParseJSON(options.echarts, {});
+  return {
+    id: panel.id || index + 1,
+    title: panel.title || `Panel ${index + 1}`,
+    description: panel.description || '',
+    type: panel.type || 'timeseries',
+    queryType,
+    query: panel.query || '',
+    sourceQuery: panel.sourceQuery || (queryType === 'promql' ? (panel.query || '') : ''),
+    datasource: panel.datasource || null,
+    legend: panel.legend || '',
+    unit: panel.unit || '',
+    thresholds: Array.isArray(panel.thresholds) ? panel.thresholds : [],
+    renderer: panel.renderer || (panel.grafana ? 'echarts' : 'auto'),
+    options,
+    fieldConfig: panel.fieldConfig || {},
+    layout: panel.layout || { x: (index % 2) * 6, y: Math.floor(index / 2) * 8, w: 6, h: 8 },
+    grafana: panel.grafana || null,
+  };
+}
+
+function panelSourceQuery(panel) {
+  if ((panel.queryType || 'promql') === 'sql') return panel.sourceQuery || '';
+  return panel.query || panel.sourceQuery || '';
+}
+
+function resolvePanelRenderer(panel) {
+  if (panel.renderer && panel.renderer !== 'auto') return panel.renderer;
+  if (panel.type === 'pie' || panel.type === 'scatter' || panel.type === 'heatmap') return 'echarts';
+  if (panel.grafana && panel.type !== 'table') return 'echarts';
+  if ((panel.queryType || 'promql') === 'sql' && panel.type !== 'table') return 'echarts';
+  return 'chartjs';
+}
+
+function promSeriesRows(data) {
+  const raw = data?.data?.result || [];
+  const rows = [];
+  raw.forEach((item, index) => {
+    const metric = item?.metric || {};
+    const label = labelsToString(metric, index);
+    const values = item?.values || (item?.value ? [item.value] : []);
+    values.forEach(point => {
+      const row = {
+        series: label,
+        label,
+        time: Number(point[0]),
+        value: Number(point[1]),
+      };
+      Object.entries(metric).forEach(([key, value]) => {
+        row[key] = value;
+      });
+      rows.push(row);
+    });
+  });
+  return rows;
+}
+
+function firstNumber(...values) {
+  for (const value of values) {
+    const num = Number(value);
+    if (Number.isFinite(num)) return num;
+  }
+  return null;
+}
+
+function normalizeSQLRows(rows) {
+  return (rows || []).map((row, index) => {
+    const normalized = { ...(row || {}) };
+    normalized.label = String(normalized.label ?? normalized.series ?? normalized.name ?? `row_${index + 1}`);
+    normalized.value = firstNumber(normalized.value, normalized.y, normalized.metric, normalized.count);
+    normalized.time = firstNumber(normalized.time, normalized.ts, normalized.timestamp);
+    return normalized;
+  });
+}
+
+function rowsToSeries(rows) {
+  const grouped = new Map();
+  (rows || []).forEach((row, index) => {
+    const label = String(row.label ?? row.series ?? row.name ?? `series_${index + 1}`);
+    const time = firstNumber(row.time, row.ts, row.timestamp, index + 1);
+    const value = firstNumber(row.value, row.y, row.metric, row.count);
+    if (!Number.isFinite(time) || !Number.isFinite(value)) return;
+    if (!grouped.has(label)) grouped.set(label, { label, values: [] });
+    grouped.get(label).values.push([time, value]);
+  });
+  return [...grouped.values()].map(series => ({
+    ...series,
+    values: series.values.sort((a, b) => a[0] - b[0]),
+  }));
+}
+
+function runPanelSQLTransform(sql, rows) {
+  const statement = (sql || '').trim();
+  if (!window.alasql) throw new Error('SQL transform engine is not available');
+  if (!statement) {
+    return normalizeSQLRows(window.alasql('SELECT series AS label, MAX(value) AS value, MAX(time) AS time FROM ? GROUP BY series ORDER BY value DESC', [rows]));
+  }
+  const result = window.alasql(statement, [rows]);
+  if (!Array.isArray(result)) throw new Error('SQL transform must return a row array');
+  return normalizeSQLRows(result);
+}
+
+async function fetchPanelDataset(panel, start, end, step) {
+  const sourceQuery = panelSourceQuery(panel);
+  if (!sourceQuery) throw new Error((panel.queryType || 'promql') === 'sql' ? 'SQL 面板需要先填写源 PromQL 查询' : '此面板没有查询语句');
+  const raw = await queryPromQL(sourceQuery, start, end, step);
+  if ((panel.queryType || 'promql') !== 'sql') {
+    const series = normalizeSeries(raw);
+    return {
+      mode: 'promql',
+      raw,
+      rows: latestRowsFromSeries(series),
+      series,
+    };
+  }
+  const sqlRows = runPanelSQLTransform(panel.query, promSeriesRows(raw));
+  return {
+    mode: 'sql',
+    raw,
+    rows: sqlRows,
+    series: rowsToSeries(sqlRows),
+  };
+}
+
+function mergeDeep(base, extra) {
+  if (!extra || typeof extra !== 'object' || Array.isArray(extra)) return extra === undefined ? base : extra;
+  const target = { ...(base || {}) };
+  Object.entries(extra).forEach(([key, value]) => {
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      target[key] = mergeDeep(target[key], value);
+    } else {
+      target[key] = value;
+    }
+  });
+  return target;
+}
+
+function buildPanelStatOption(dataset, panel) {
+  const row = dataset.rows?.[0] || {};
+  return {
+    animationDuration: 240,
+    tooltip: { show: false },
+    xAxis: { show: false },
+    yAxis: { show: false },
+    series: [],
+    graphic: [
+      {
+        type: 'text',
+        left: 'center',
+        top: '36%',
+        style: {
+          text: formatMetricValue(row.value, panel.unit),
+          fill: '#f8fafc',
+          font: '700 34px "Segoe UI", sans-serif',
+        },
+      },
+      {
+        type: 'text',
+        left: 'center',
+        top: '60%',
+        style: {
+          text: row.label || panel.legend || panel.title,
+          fill: '#94a3b8',
+          font: '500 13px "Segoe UI", sans-serif',
+        },
+      },
+    ],
+  };
+}
+
+function buildPanelGaugeOption(dataset, panel) {
+  const row = dataset.rows?.[0] || {};
+  const max = Number(panel.options?.max || panel.fieldConfig?.defaults?.max || 100);
+  return {
+    tooltip: { formatter: '{b}: {c}' },
+    series: [{
+      type: 'gauge',
+      min: 0,
+      max: Number.isFinite(max) && max > 0 ? max : 100,
+      progress: { show: true, width: 14, itemStyle: { color: '#34d399' } },
+      axisLine: { lineStyle: { width: 14, color: [[1, '#1f2937']] } },
+      axisTick: { show: false },
+      splitLine: { show: false },
+      axisLabel: { color: '#94a3b8' },
+      detail: {
+        valueAnimation: true,
+        color: '#f8fafc',
+        fontSize: 24,
+        formatter: value => formatMetricValue(value, panel.unit),
+      },
+      data: [{ value: Number(row.value || 0), name: row.label || panel.title }],
+    }],
+  };
+}
+
+function buildPanelPieOption(dataset) {
+  const rows = (dataset.rows || []).slice(0, 16);
+  return {
+    tooltip: { trigger: 'item' },
+    legend: { bottom: 0, textStyle: { color: '#cbd5e1' } },
+    series: [{
+      type: 'pie',
+      radius: ['38%', '70%'],
+      itemStyle: { borderColor: '#081018', borderWidth: 2 },
+      label: { color: '#e2e8f0' },
+      data: rows.map(row => ({ name: row.label, value: Number(row.value || 0) })),
+    }],
+  };
+}
+
+function buildPanelBarOption(dataset, panel) {
+  const rows = (dataset.rows || []).slice(0, 24);
+  return {
+    tooltip: { trigger: 'axis' },
+    xAxis: {
+      type: 'category',
+      data: rows.map(row => row.label),
+      axisLabel: { color: '#94a3b8', interval: 0, rotate: rows.length > 8 ? 24 : 0 },
+      axisLine: { lineStyle: { color: '#334155' } },
+    },
+    yAxis: {
+      type: 'value',
+      axisLabel: { color: '#94a3b8' },
+      splitLine: { lineStyle: { color: '#1f2937' } },
+    },
+    series: [{
+      type: 'bar',
+      name: panel.title,
+      data: rows.map(row => Number(row.value || 0)),
+      itemStyle: { color: '#34d399', borderRadius: [6, 6, 0, 0] },
+    }],
+  };
+}
+
+function buildPanelHeatmapOption(dataset) {
+  const seriesList = (dataset.series || []).slice(0, 8);
+  const xLabels = [];
+  const xIndex = new Map();
+  const yLabels = seriesList.map(item => item.label.slice(0, 48));
+  const points = [];
+  seriesList.forEach((item, y) => {
+    item.values.slice(-48).forEach(([time, value]) => {
+      const label = new Date(time * 1000).toLocaleTimeString();
+      if (!xIndex.has(label)) {
+        xIndex.set(label, xLabels.length);
+        xLabels.push(label);
+      }
+      points.push([xIndex.get(label), y, Number(value || 0)]);
+    });
+  });
+  return {
+    tooltip: { position: 'top' },
+    grid: { left: 84, right: 16, top: 24, bottom: 48 },
+    xAxis: {
+      type: 'category',
+      data: xLabels,
+      splitArea: { show: false },
+      axisLabel: { color: '#94a3b8' },
+    },
+    yAxis: {
+      type: 'category',
+      data: yLabels,
+      splitArea: { show: false },
+      axisLabel: { color: '#94a3b8' },
+    },
+    visualMap: {
+      min: Math.min(...points.map(point => point[2]), 0),
+      max: Math.max(...points.map(point => point[2]), 1),
+      orient: 'horizontal',
+      left: 'center',
+      bottom: 0,
+      textStyle: { color: '#cbd5e1' },
+      inRange: { color: ['#0f172a', '#2563eb', '#22c55e', '#f59e0b'] },
+    },
+    series: [{
+      type: 'heatmap',
+      data: points,
+      emphasis: { itemStyle: { shadowBlur: 10, shadowColor: 'rgba(15,23,42,0.55)' } },
+    }],
+  };
+}
+
+function buildPanelScatterOption(dataset, panel) {
+  const rows = (dataset.rows || []).slice(0, 200);
+  return {
+    tooltip: { trigger: 'item' },
+    xAxis: {
+      type: 'value',
+      axisLabel: { color: '#94a3b8' },
+      splitLine: { lineStyle: { color: '#1f2937' } },
+    },
+    yAxis: {
+      type: 'value',
+      axisLabel: { color: '#94a3b8' },
+      splitLine: { lineStyle: { color: '#1f2937' } },
+    },
+    series: [{
+      type: 'scatter',
+      name: panel.title,
+      symbolSize: row => Math.max(8, Math.min(26, Number(row[2] || 10))),
+      data: rows.map((row, index) => [
+        firstNumber(row.x, row.time, index + 1) || 0,
+        firstNumber(row.y, row.value) || 0,
+        firstNumber(row.size, row.value, 10) || 10,
+      ]),
+      itemStyle: { color: '#38bdf8' },
+    }],
+  };
+}
+
+function buildPanelLineOption(dataset) {
+  return {
+    tooltip: { trigger: 'axis' },
+    legend: { bottom: 0, textStyle: { color: '#cbd5e1' } },
+    grid: { left: 42, right: 16, top: 24, bottom: 52 },
+    xAxis: {
+      type: 'time',
+      axisLabel: { color: '#94a3b8' },
+      axisLine: { lineStyle: { color: '#334155' } },
+    },
+    yAxis: {
+      type: 'value',
+      axisLabel: { color: '#94a3b8' },
+      splitLine: { lineStyle: { color: '#1f2937' } },
+    },
+    series: (dataset.series || []).slice(0, 12).map((series, index) => ({
+      type: 'line',
+      name: series.label.slice(0, 72),
+      showSymbol: false,
+      smooth: 0.2,
+      lineStyle: { width: index === 0 ? 2.4 : 1.6 },
+      areaStyle: index === 0 ? { opacity: 0.08 } : undefined,
+      data: series.values.map(([time, value]) => [time * 1000, value]),
+    })),
+  };
+}
+
+function buildEChartsOption(dataset, panel) {
+  if (panel.type === 'stat') return buildPanelStatOption(dataset, panel);
+  if (panel.type === 'gauge') return buildPanelGaugeOption(dataset, panel);
+  if (panel.type === 'pie') return buildPanelPieOption(dataset);
+  if (panel.type === 'bar' || panel.type === 'barchart') return buildPanelBarOption(dataset, panel);
+  if (panel.type === 'heatmap') return buildPanelHeatmapOption(dataset);
+  if (panel.type === 'scatter') return buildPanelScatterOption(dataset, panel);
+  return buildPanelLineOption(dataset);
+}
+
+function renderEChartsPanel(host, dataset, panel) {
+  if (!window.echarts) throw new Error('ECharts is not available');
+  const domId = `${host.id}-echarts`;
+  host.innerHTML = `<div id="${domId}" style="width:100%;height:100%"></div>`;
+  const option = mergeDeep(buildEChartsOption(dataset, panel), panel.options?.echarts || {});
+  const instance = window.echarts.init(document.getElementById(domId), null, { renderer: 'canvas' });
+  instance.setOption(option, true);
+  charts[domId] = instance;
+}
+
+function formatTableCell(value, key, unit) {
+  if (value === null || value === undefined || value === '') return '-';
+  if (/(^|_)(time|ts|timestamp)$/.test(key) && Number.isFinite(Number(value))) {
+    const ts = Number(value);
+    const ms = ts > 1e12 ? ts : ts * 1000;
+    return new Date(ms).toLocaleString();
+  }
+  if (typeof value === 'number') {
+    return key === 'value' || key === 'y' ? formatMetricValue(value, unit) : formatNumber(value);
+  }
+  if (typeof value === 'object') return escapeHtml(JSON.stringify(value));
+  return escapeHtml(String(value));
+}
+
+function analyzeGrafanaDashboard(dashboard) {
+  const panels = flattenGrafanaPanels(dashboard.panels || []);
+  const report = {
+    title: dashboard.title || 'Imported Grafana Dashboard',
+    totalPanels: panels.length,
+    fullySupported: 0,
+    partiallySupported: 0,
+    unsupported: 0,
+    totalWarnings: 0,
+    panels: [],
+  };
+  panels.forEach((panel, index) => {
+    const warnings = [];
+    const mappedType = grafanaTypeMap[panel.type] || panel.type || 'timeseries';
+    if (!grafanaTypeMap[panel.type] && !['timeseries', 'stat', 'gauge', 'table', 'bar', 'pie', 'scatter', 'heatmap'].includes(mappedType)) {
+      warnings.push(`面板类型 ${panel.type || 'unknown'} 需要人工确认`);
+    }
+    if ((panel.targets || []).length > 1) warnings.push('存在多个 targets，当前默认只直接渲染首个 target');
+    if ((panel.transformations || []).length > 0) warnings.push('存在 transformations，当前保留原配置但不会逐条复刻 Grafana 行为');
+    if (panel.datasource && typeof panel.datasource === 'object') warnings.push('datasource 为复杂对象，建议导入后复核变量与数据源映射');
+    if (warnings.length === 0) report.fullySupported += 1;
+    else if (mappedType) report.partiallySupported += 1;
+    else report.unsupported += 1;
+    report.totalWarnings += warnings.length;
+    report.panels.push({
+      id: panel.id || index + 1,
+      title: panel.title || `Panel ${index + 1}`,
+      grafanaType: panel.type || 'unknown',
+      mappedType,
+      warnings,
+    });
+  });
+  return report;
+}
+
+function renderGrafanaCompatibilityReport(report) {
+  if (!report) return '';
+  return `
+    <div class="doc-list">
+      <div class="doc-item"><strong>兼容性总览</strong><p>面板 ${report.totalPanels} 个，完全兼容 ${report.fullySupported} 个，需人工复核 ${report.partiallySupported + report.unsupported} 个，告警 ${report.totalWarnings} 项。</p></div>
+      ${report.panels.slice(0, 10).map(item => `<div class="doc-item"><strong>${escapeHtml(item.title)}</strong><p>${escapeHtml(item.grafanaType)} -> ${escapeHtml(item.mappedType)}</p><p>${item.warnings.length ? escapeHtml(item.warnings.join('；')) : '可直接落地'}</p></div>`).join('')}
+    </div>
+  `;
 }
 
 function formatMetricValue(value, unit = '') {
@@ -496,7 +924,7 @@ function renderTimeSeriesChart(canvasId, data, color = '#34d399') {
   const canvas = document.getElementById(canvasId);
   if (!canvas) return;
   const ctx = canvas.getContext('2d');
-  const series = normalizeSeries(data).slice(0, 18);
+  const series = (Array.isArray(data) ? data : normalizeSeries(data)).slice(0, 18);
   const labels = [...new Set(series.flatMap(s => s.values.map(v => new Date(v[0] * 1000).toLocaleTimeString())))];
   const palette = ['#34d399', '#38bdf8', '#fbbf24', '#fb7185', '#a78bfa', '#f472b6', '#60a5fa'];
   charts[canvasId] = new Chart(ctx, {
@@ -777,7 +1205,7 @@ async function createDashboardPreset(preset, tags = ['preset']) {
     body: JSON.stringify({
       title: preset.title,
       description: preset.description,
-      panels: JSON.stringify(preset.panels),
+      panels: JSON.stringify((preset.panels || []).map((panel, index) => normalizePanelDefinition(panel, index))),
       layout: '{}',
       variables: '[]',
       tags: JSON.stringify(tags),
@@ -791,9 +1219,23 @@ function importGrafanaDialog() {
       <label>Grafana JSON</label>
       <textarea id="grafana-json" class="json-editor code" placeholder='{"title":"Node Exporter","panels":[...]}'></textarea>
     </div>
-    <p class="hint">支持 Grafana 的 panels、targets、gridPos、fieldConfig、templating。导入后会转换成 Sentinel233 可编辑面板。</p>
-    <button class="btn btn-primary" onclick="importGrafanaDashboard()">导入</button>
+    <p class="hint">支持 Grafana 的 panels、targets、gridPos、fieldConfig、templating。导入后会转换成更易读的 Sentinel233 面板定义，并优先走 ECharts 贴近 Grafana 观感。</p>
+    <div id="grafana-compatibility"></div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap">
+      <button class="btn btn-secondary" onclick="previewGrafanaCompatibility()">先校验兼容性</button>
+      <button class="btn btn-primary" onclick="importGrafanaDashboard()">导入</button>
+    </div>
   `);
+}
+
+function previewGrafanaCompatibility() {
+  try {
+    const raw = JSON.parse(document.getElementById('grafana-json').value);
+    const report = analyzeGrafanaDashboard(raw.dashboard || raw);
+    document.getElementById('grafana-compatibility').innerHTML = renderGrafanaCompatibilityReport(report);
+  } catch (e) {
+    toast(`校验失败：${e.message}`);
+  }
 }
 
 async function importGrafanaDashboard() {
@@ -813,7 +1255,7 @@ async function importGrafanaDashboard() {
       }),
     });
     closeModal();
-    toast(`已导入 ${converted.panels.length} 个 Grafana 面板`);
+    toast(`已导入 ${converted.panels.length} 个 Grafana 面板，兼容告警 ${converted.layout.compatibility?.totalWarnings || 0} 项`);
     renderDashboards();
   } catch (e) {
     toast(`导入失败：${e.message}`);
@@ -821,17 +1263,22 @@ async function importGrafanaDashboard() {
 }
 
 function convertGrafanaDashboard(dashboard) {
+  const compatibility = analyzeGrafanaDashboard(dashboard);
+  const compatibilityByID = new Map(compatibility.panels.map(item => [item.id, item]));
   const panels = flattenGrafanaPanels(dashboard.panels || []).map(panel => {
     const target = (panel.targets || []).find(tg => tg.expr || tg.query) || {};
     const type = grafanaTypeMap[panel.type] || panel.type || 'timeseries';
-    return {
+    return normalizePanelDefinition({
       title: panel.title || 'Grafana Panel',
       type,
       query: target.expr || target.query || '',
+      sourceQuery: target.expr || target.query || '',
+      queryType: 'promql',
       datasource: target.datasource || panel.datasource || null,
       legend: target.legendFormat || target.alias || '',
       unit: panel.fieldConfig?.defaults?.unit || '',
       thresholds: panel.fieldConfig?.defaults?.thresholds?.steps || [],
+      renderer: type === 'table' ? 'table' : 'echarts',
       options: panel.options || {},
       fieldConfig: panel.fieldConfig || {},
       layout: panel.gridPos || {},
@@ -840,14 +1287,15 @@ function convertGrafanaDashboard(dashboard) {
         type: panel.type,
         targets: panel.targets || [],
         transformations: panel.transformations || [],
+        compatibility: compatibilityByID.get(panel.id || 0) || null,
       },
-    };
+    });
   });
   return {
     title: dashboard.title || 'Imported Grafana Dashboard',
     description: dashboard.description || `Imported from Grafana uid ${dashboard.uid || '-'}`,
     panels,
-    layout: { schemaVersion: dashboard.schemaVersion, uid: dashboard.uid, time: dashboard.time || null },
+    layout: { schemaVersion: dashboard.schemaVersion, uid: dashboard.uid, time: dashboard.time || null, compatibility },
     variables: (dashboard.templating?.list || []).map(v => ({
       name: v.name,
       label: v.label || v.name,
@@ -885,6 +1333,7 @@ function convertToGrafanaDashboard(dash) {
   try { panels = JSON.parse(dash.panels || '[]'); } catch { panels = []; }
   try { variables = JSON.parse(dash.variables || '[]'); } catch { variables = []; }
   try { layout = JSON.parse(dash.layout || '{}'); } catch { layout = {}; }
+  panels = panels.map((panel, index) => normalizePanelDefinition(panel, index));
   return {
     title: dash.title,
     uid: layout.uid || `sentinel-${dash.id}`,
@@ -901,13 +1350,13 @@ function convertToGrafanaDashboard(dash) {
       datasource: panel.datasource || null,
       fieldConfig: panel.fieldConfig || { defaults: { unit: panel.unit || '' }, overrides: [] },
       options: panel.options || {},
-      targets: panel.grafana?.targets?.length ? panel.grafana.targets : [{ refId: 'A', expr: panel.query, legendFormat: panel.legend || '' }],
+      targets: panel.grafana?.targets?.length ? panel.grafana.targets : [{ refId: 'A', expr: panelSourceQuery(panel), legendFormat: panel.legend || '' }],
     })),
   };
 }
 
 function reverseGrafanaType(type) {
-  return ({ timeseries: 'timeseries', stat: 'stat', gauge: 'gauge', table: 'table', bar: 'barchart', heatmap: 'heatmap' })[type] || 'timeseries';
+  return ({ timeseries: 'timeseries', stat: 'stat', gauge: 'gauge', table: 'table', bar: 'barchart', pie: 'piechart', heatmap: 'heatmap', scatter: 'xychart' })[type] || 'timeseries';
 }
 
 function safeParseJSON(value, fallback) {
@@ -928,6 +1377,7 @@ async function openDashboard(id) {
   let variables = [];
   try { panels = JSON.parse(dash.panels || '[]'); } catch { panels = []; }
   try { variables = JSON.parse(dash.variables || '[]'); } catch { variables = []; }
+  panels = panels.map((panel, index) => normalizePanelDefinition(panel, index));
   variables = await hydrateDashboardVariables(variables);
   activeDashboardPanels = panels;
   activeDashboardId = id;
@@ -1039,39 +1489,47 @@ function setDashboardVariable(name, value) {
 
 function panelFrame(panel, canvasId) {
   const width = Math.min(12, Math.max(3, Number(panel.layout?.w || 6)));
-  return `<div class="panel dashboard-panel" style="grid-column:span ${width}"><div class="section-title" style="padding:14px;margin:0"><div><h3>${escapeHtml(panel.title || 'Panel')}</h3><p>${escapeHtml(panel.query || '')}</p></div><span class="badge">${escapeHtml(panel.type || 'timeseries')}</span></div><div class="panel-viz" id="${canvasId}"></div></div>`;
+  const queryText = (panel.queryType || 'promql') === 'sql'
+    ? `PromQL: ${panelSourceQuery(panel) || '-'} | SQL: ${panel.query || '-'}`
+    : (panel.query || panel.description || '');
+  const badge = [panel.type || 'timeseries', panel.queryType || 'promql', resolvePanelRenderer(panel)].join(' / ');
+  return `<div class="panel dashboard-panel" style="grid-column:span ${width}"><div class="section-title" style="padding:14px;margin:0"><div><h3>${escapeHtml(panel.title || 'Panel')}</h3><p>${escapeHtml(queryText)}</p></div><span class="badge">${escapeHtml(badge)}</span></div><div class="panel-viz" id="${canvasId}"></div></div>`;
 }
 
 async function drawPanel(panel, canvasId) {
-  if (!panel.query) {
+  if (!panelSourceQuery(panel)) {
     const emptyHost = document.getElementById(canvasId);
-    if (emptyHost) emptyHost.innerHTML = '<div class="empty-state">此面板没有 PromQL 查询</div>';
+    if (emptyHost) emptyHost.innerHTML = '<div class="empty-state">此面板还没有可执行的数据查询</div>';
     return;
   }
   const range = document.getElementById('time-range').value;
   const now = Math.floor(Date.now() / 1000);
   const start = now - timeRangeToSeconds(range);
+  const step = Math.max(Math.floor((now - start) / 240), 15);
   const host = document.getElementById(canvasId);
   if (!host) return;
   Object.keys(charts).filter(key => key.startsWith(canvasId)).forEach(key => {
-    charts[key].destroy();
+    if (charts[key]?.destroy) charts[key].destroy();
+    if (charts[key]?.dispose) charts[key].dispose();
     delete charts[key];
   });
   try {
-    const data = await queryPromQL(panel.query, start, now, 15);
-    if (panel.type === 'stat') return renderStatPanel(host, data, panel);
-    if (panel.type === 'gauge') return renderGaugePanel(host, data, panel);
-    if (panel.type === 'table') return renderTablePanel(host, data, panel);
-    if (panel.type === 'bar' || panel.type === 'barchart') return renderBarPanel(host, data, panel);
+    const dataset = await fetchPanelDataset(panel, start, now, step);
+    const renderer = resolvePanelRenderer(panel);
+    if (renderer === 'echarts' && panel.type !== 'table') return renderEChartsPanel(host, dataset, panel);
+    if (panel.type === 'stat') return renderStatPanel(host, dataset, panel);
+    if (panel.type === 'gauge') return renderGaugePanel(host, dataset, panel);
+    if (panel.type === 'table') return renderTablePanel(host, dataset, panel);
+    if (panel.type === 'bar' || panel.type === 'barchart') return renderBarPanel(host, dataset, panel);
     host.innerHTML = `<canvas id="${canvasId}-canvas"></canvas>`;
-    return renderTimeSeriesChart(`${canvasId}-canvas`, data);
+    return renderTimeSeriesChart(`${canvasId}-canvas`, dataset.series);
   } catch (e) {
     host.innerHTML = `<div class="empty-state">${escapeHtml(e.message)}</div>`;
   }
 }
 
-function renderStatPanel(host, data, panel) {
-  const rows = latestRows(data);
+function renderStatPanel(host, dataset, panel) {
+  const rows = dataset.rows || [];
   const primary = rows[0];
   host.innerHTML = `
     <div class="stat-display">
@@ -1081,8 +1539,8 @@ function renderStatPanel(host, data, panel) {
   `;
 }
 
-function renderGaugePanel(host, data, panel) {
-  const rows = latestRows(data);
+function renderGaugePanel(host, dataset, panel) {
+  const rows = dataset.rows || [];
   const value = Number(rows[0]?.value || 0);
   const max = Number(panel.options?.max || panel.fieldConfig?.defaults?.max || 100);
   const pct = Math.max(0, Math.min(100, max ? (value / max) * 100 : value));
@@ -1094,22 +1552,27 @@ function renderGaugePanel(host, data, panel) {
   `;
 }
 
-function renderTablePanel(host, data, panel) {
-  const rows = latestRows(data);
-  host.innerHTML = rows.length ? `
-    <div class="table-wrap panel-table"><table><thead><tr><th>Series</th><th>Value</th><th>Time</th></tr></thead><tbody>
-      ${rows.map(row => `<tr><td class="code">${escapeHtml(row.label)}</td><td>${formatMetricValue(row.value, panel.unit)}</td><td>${row.time ? new Date(row.time * 1000).toLocaleString() : '-'}</td></tr>`).join('')}
+function renderTablePanel(host, dataset, panel) {
+  const rows = dataset.rows || [];
+  if (!rows.length) {
+    host.innerHTML = '<div class="empty-state">暂无数据</div>';
+    return;
+  }
+  const columns = [...new Set(rows.flatMap(row => Object.keys(row)).filter(key => !['__raw'].includes(key)))].slice(0, 8);
+  host.innerHTML = `
+    <div class="table-wrap panel-table"><table><thead><tr>${columns.map(key => `<th>${escapeHtml(key)}</th>`).join('')}</tr></thead><tbody>
+      ${rows.slice(0, 120).map(row => `<tr>${columns.map(key => `<td${key === 'label' || key === 'series' ? ' class="code"' : ''}>${formatTableCell(row[key], key, panel.unit)}</td>`).join('')}</tr>`).join('')}
     </tbody></table></div>
-  ` : '<div class="empty-state">暂无数据</div>';
+  `;
 }
 
-function renderBarPanel(host, data, panel) {
-  const rows = latestRows(data).slice(0, 24);
+function renderBarPanel(host, dataset, panel) {
+  const rows = (dataset.rows || []).slice(0, 24);
   host.innerHTML = `<canvas id="${host.id}-bar"></canvas>`;
   charts[`${host.id}-bar`] = new Chart(document.getElementById(`${host.id}-bar`).getContext('2d'), {
     type: 'bar',
     data: {
-      labels: rows.map(row => row.label.slice(0, 32)),
+      labels: rows.map(row => String(row.label || row.series || '-').slice(0, 32)),
       datasets: [{ label: panel.title, data: rows.map(row => row.value || 0), backgroundColor: '#34d39999', borderColor: '#34d399', borderWidth: 1 }],
     },
     options: {
@@ -1128,9 +1591,18 @@ function addPanelDialog(dashId) {
   showModal('添加面板', `
     <div class="form-grid">
       <div class="form-group"><label>标题</label><input id="panel-title" placeholder="CPU 使用"></div>
-      <div class="form-group"><label>类型</label><select id="panel-type"><option value="timeseries">时间序列</option><option value="stat">统计值</option><option value="table">表格</option><option value="gauge">仪表盘</option><option value="bar">柱状图</option><option value="heatmap">热力图</option></select></div>
+      <div class="form-group"><label>类型</label><select id="panel-type"><option value="timeseries">时间序列</option><option value="stat">统计值</option><option value="table">表格</option><option value="gauge">仪表盘</option><option value="bar">柱状图</option><option value="pie">饼图</option><option value="scatter">散点图</option><option value="heatmap">热力图</option></select></div>
+      <div class="form-group"><label>查询模式</label><select id="panel-query-type"><option value="promql">PromQL 直出</option><option value="sql">PromQL + SQL 变换</option></select></div>
+      <div class="form-group"><label>渲染器</label><select id="panel-renderer"><option value="auto">自动选择</option><option value="chartjs">Chart.js</option><option value="echarts">ECharts</option><option value="table">表格优先</option></select></div>
     </div>
-    <div class="form-group"><label>PromQL</label><input id="panel-query" class="query-input" placeholder="up"></div>
+    <div class="form-group"><label>源 PromQL</label><input id="panel-source-query" class="query-input" placeholder="rate(process_cpu_seconds_total[5m])"></div>
+    <div class="form-group"><label>SQL 变换（可选）</label><textarea id="panel-sql" class="code" placeholder="SELECT series AS label, MAX(value) AS value, MAX(time) AS time FROM ? GROUP BY series ORDER BY value DESC"></textarea></div>
+    <div class="form-grid">
+      <div class="form-group"><label>图例名（可选）</label><input id="panel-legend" placeholder="CPU"></div>
+      <div class="form-group"><label>单位（可选）</label><input id="panel-unit" placeholder="percent / bytes / ms"></div>
+    </div>
+    <div class="form-group"><label>ECharts 额外配置 JSON（可选）</label><textarea id="panel-echarts-options" class="code" placeholder='{"tooltip":{"backgroundColor":"#111827"}}'></textarea></div>
+    <p class="hint"><code>PromQL 直出</code> 适合常规监控面板；<code>PromQL + SQL 变换</code> 会先取回时序点，再用 SQL（<code>FROM ?</code>）做聚合、透视或排序，最后交给 ECharts / Table 渲染。</p>
     <button class="btn btn-primary" onclick="addPanel(${dashId})">添加</button>
   `);
 }
@@ -1139,11 +1611,31 @@ async function addPanel(dashId) {
   const resp = await api(`/api/dashboards/${dashId}`);
   const dash = resp.data;
   const panels = JSON.parse(dash.panels || '[]');
-  panels.push({
+  const queryType = document.getElementById('panel-query-type').value;
+  const sourceQuery = document.getElementById('panel-source-query').value || 'up';
+  const echartsText = document.getElementById('panel-echarts-options').value.trim();
+  let echartsOptions = {};
+  if (echartsText) {
+    try {
+      echartsOptions = JSON.parse(echartsText);
+    } catch (e) {
+      toast(`ECharts 配置 JSON 无法解析：${e.message}`);
+      return;
+    }
+  }
+  panels.push(normalizePanelDefinition({
     title: document.getElementById('panel-title').value || 'Panel',
-    query: document.getElementById('panel-query').value || 'up',
     type: document.getElementById('panel-type').value,
-  });
+    queryType,
+    query: queryType === 'sql'
+      ? (document.getElementById('panel-sql').value || 'SELECT series AS label, MAX(value) AS value, MAX(time) AS time FROM ? GROUP BY series ORDER BY value DESC')
+      : sourceQuery,
+    sourceQuery,
+    legend: document.getElementById('panel-legend').value || '',
+    unit: document.getElementById('panel-unit').value || '',
+    renderer: document.getElementById('panel-renderer').value,
+    options: { echarts: echartsOptions },
+  }, panels.length));
   dash.panels = JSON.stringify(panels);
   await api(`/api/dashboards/${dashId}`, { method: 'PUT', body: JSON.stringify(dash) });
   closeModal();
