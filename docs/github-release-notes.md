@@ -11,7 +11,7 @@
 
 ### API / 运维改进说明
 - 强化 integrations 文档中的生产迁移路径说明（Scrape/remote_write 分层模型、角色与租户联动）。
-- 导入后的面板保留 compatibility/source PromQL/renderer 元信息，便于 UI、API 和脚本统一处理。
+- 导入后的面板保留 integration/source PromQL/renderer 元信息，便于 UI、API 和脚本统一处理。
 - 新增 loopback-only 的 `Local Agent API`，允许本机 agent 免登录直控 dashboard 与 panel 创建。
 - 归档了可直接用于发布会前对外沟通的版本说明文档。
 

@@ -543,7 +543,7 @@ func (s *Server) handleLocalAgentCapabilities(w http.ResponseWriter, r *http.Req
 			"dashboardCreate":         true,
 			"dashboardUpdate":         true,
 			"dashboardAppendPanel":    true,
-			"grafanaCompatibility":    true,
+			"grafanaIntegration":      true,
 			"queryModes":              []string{"promql", "sql"},
 			"renderers":               []string{"auto", "chartjs", "echarts", "table"},
 			"intendedAutomationUsers": []string{"local-agent", "codex", "assistant-runtime"},
@@ -756,10 +756,10 @@ func convertGrafanaPayloadToDashboard(payload map[string]json.RawMessage) (*stor
 	if strings.TrimSpace(gDashboard.Title) == "" {
 		gDashboard.Title = "Imported Grafana Dashboard"
 	}
-	compatibility := buildGrafanaCompatibilityReport(gDashboard.Panels)
-	compatibilityByID := make(map[int]map[string]interface{}, len(compatibility.Panels))
-	for _, panel := range compatibility.Panels {
-		compatibilityByID[panel.ID] = panel.toMap()
+	integration := buildGrafanaIntegrationReport(gDashboard.Panels)
+	integrationByID := make(map[int]map[string]interface{}, len(integration.Panels))
+	for _, panel := range integration.Panels {
+		integrationByID[panel.ID] = panel.toMap()
 	}
 	convertedPanels := make([]map[string]interface{}, 0)
 	for idx, panel := range flattenGrafanaPanels(gDashboard.Panels) {
@@ -812,7 +812,7 @@ func convertGrafanaPayloadToDashboard(payload map[string]json.RawMessage) (*stor
 				"type":            panel.Type,
 				"targets":         cloneTargets(panel.Targets),
 				"transformations": cloneObject(panel.Transformations),
-				"compatibility":   compatibilityByID[panelID],
+				"integration":     integrationByID[panelID],
 			},
 		})
 	}
@@ -841,7 +841,7 @@ func convertGrafanaPayloadToDashboard(payload map[string]json.RawMessage) (*stor
 		"schemaVersion": gDashboard.SchemaVersion,
 		"uid":           gDashboard.UID,
 		"time":          gDashboard.Time,
-		"compatibility": compatibility.toMap(),
+		"integration":   integration.toMap(),
 	}
 	if len(layout) == 0 || isEmptyLayout(layout) {
 		layout = map[string]interface{}{}
@@ -964,16 +964,16 @@ func mapGrafanaTypeForExport(grafanaRaw interface{}, fallback string) string {
 	return strings.ToLower(strings.TrimSpace(grafanaType))
 }
 
-type grafanaCompatibilityReport struct {
+type grafanaIntegrationReport struct {
 	TotalPanels      int
 	FullySupported   int
 	PartiallySupport int
 	Unsupported      int
 	TotalWarnings    int
-	Panels           []grafanaPanelCompatibility
+	Panels           []grafanaPanelIntegration
 }
 
-type grafanaPanelCompatibility struct {
+type grafanaPanelIntegration struct {
 	ID          int
 	Title       string
 	GrafanaType string
@@ -981,14 +981,14 @@ type grafanaPanelCompatibility struct {
 	Warnings    []string
 }
 
-func buildGrafanaCompatibilityReport(panels []grafanaImportPanel) grafanaCompatibilityReport {
+func buildGrafanaIntegrationReport(panels []grafanaImportPanel) grafanaIntegrationReport {
 	flattened := flattenGrafanaPanels(panels)
-	report := grafanaCompatibilityReport{
+	report := grafanaIntegrationReport{
 		TotalPanels: len(flattened),
-		Panels:      make([]grafanaPanelCompatibility, 0, len(flattened)),
+		Panels:      make([]grafanaPanelIntegration, 0, len(flattened)),
 	}
 	for idx, panel := range flattened {
-		item := buildGrafanaPanelCompatibility(panel, idx)
+		item := buildGrafanaPanelIntegration(panel, idx)
 		if len(item.Warnings) == 0 {
 			report.FullySupported++
 		} else if item.MappedType != "" {
@@ -1002,9 +1002,9 @@ func buildGrafanaCompatibilityReport(panels []grafanaImportPanel) grafanaCompati
 	return report
 }
 
-func buildGrafanaPanelCompatibility(panel grafanaImportPanel, index int) grafanaPanelCompatibility {
+func buildGrafanaPanelIntegration(panel grafanaImportPanel, index int) grafanaPanelIntegration {
 	mappedType := mapGrafanaPanelType(panel.Type)
-	item := grafanaPanelCompatibility{
+	item := grafanaPanelIntegration{
 		ID:          coerceInt(panel.ID, index+1),
 		Title:       panelTitle(panel.Title, "Grafana Panel"),
 		GrafanaType: firstNonEmptyString(panel.Type, "unknown"),
@@ -1028,7 +1028,7 @@ func buildGrafanaPanelCompatibility(panel grafanaImportPanel, index int) grafana
 	return item
 }
 
-func (r grafanaCompatibilityReport) toMap() map[string]interface{} {
+func (r grafanaIntegrationReport) toMap() map[string]interface{} {
 	panels := make([]map[string]interface{}, 0, len(r.Panels))
 	for _, panel := range r.Panels {
 		panels = append(panels, panel.toMap())
@@ -1043,7 +1043,7 @@ func (r grafanaCompatibilityReport) toMap() map[string]interface{} {
 	}
 }
 
-func (p grafanaPanelCompatibility) toMap() map[string]interface{} {
+func (p grafanaPanelIntegration) toMap() map[string]interface{} {
 	return map[string]interface{}{
 		"id":          p.ID,
 		"title":       p.Title,

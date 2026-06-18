@@ -32,12 +32,12 @@ function Get-FlattenPanels($Panels) {
   return $result
 }
 
-function Get-CompatibilityWarnings($DashboardData) {
+function Get-IntegrationWarnings($DashboardData) {
   if (-not $DashboardData.layout) { return 0 }
   try {
     $layout = $DashboardData.layout | ConvertFrom-Json -Depth 100
-    if ($layout.compatibility.totalWarnings -ne $null) {
-      return [int]$layout.compatibility.totalWarnings
+    if ($layout.integration.totalWarnings -ne $null) {
+      return [int]$layout.integration.totalWarnings
     }
   } catch {
   }
@@ -104,7 +104,7 @@ foreach ($file in $files) {
   ($exported.data | ConvertTo-Json -Depth 100) | Set-Content -LiteralPath $archiveFile -Encoding UTF8
 
   $exportedPanels = @(Get-FlattenPanels $exported.data.panels)
-  $warningCount = Get-CompatibilityWarnings $dashboardData
+  $warningCount = Get-IntegrationWarnings $dashboardData
   $status = if ($sourcePanels.Count -eq $exportedPanels.Count) { "ok" } else { "review" }
 
   $results += [pscustomobject]@{
@@ -113,7 +113,7 @@ foreach ($file in $files) {
     title = $dashboardData.title
     source_panel_count = $sourcePanels.Count
     exported_panel_count = $exportedPanels.Count
-    compatibility_warnings = $warningCount
+    integration_warnings = $warningCount
     archive_file = $archiveFile
     status = $status
   }
@@ -134,4 +134,4 @@ Write-Host "Base URL: $BaseUrl"
 Write-Host "Tenant:   $Tenant"
 Write-Host "Report:   $summaryPath"
 Write-Host ""
-$results | Format-Table file, dashboard_id, source_panel_count, exported_panel_count, compatibility_warnings, status -AutoSize
+$results | Format-Table file, dashboard_id, source_panel_count, exported_panel_count, integration_warnings, status -AutoSize

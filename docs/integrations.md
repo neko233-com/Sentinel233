@@ -1,6 +1,6 @@
 # Sentinel233 Server integrations
 
-Sentinel233 Server treats Prometheus-compatible `/metrics` scraping as one ingestion path, not the only path.
+Sentinel233 Server treats Prometheus/OpenMetrics `/metrics` scraping as one ingestion path, not the only path.
 
 ## Supported ingestion presets
 
@@ -17,7 +17,7 @@ Sentinel233 Server treats Prometheus-compatible `/metrics` scraping as one inges
 
 ## Prometheus remote write
 
-Existing Prometheus-compatible agents can push samples directly to:
+Existing Prometheus, Agent, or Alloy agents can push samples directly to:
 
 ```text
 POST /api/v1/write
@@ -128,7 +128,7 @@ git submodule add https://github.com/neko233-com/sentinel233-lib-go.git libs/sen
 
 At the time of this update, the remote repository is empty, so Git cannot checkout a submodule commit yet. Once `sentinel233-lib-go` has an initial commit, run the command above and commit `.gitmodules` plus the gitlink. The client should target `/api/sentinel/v1/write` rather than exposing Prometheus text as its primary path.
 
-## Prometheus-compatible examples
+## Prometheus/OpenMetrics examples
 
 Go HTTP server:
 

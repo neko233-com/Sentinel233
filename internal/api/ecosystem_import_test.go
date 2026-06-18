@@ -13,7 +13,7 @@ import (
 	"github.com/neko233-com/Sentinel233/internal/tsdb"
 )
 
-func TestCompatImportPrometheusConfigCreatesTargets(t *testing.T) {
+func TestEcosystemImportPrometheusConfigCreatesTargets(t *testing.T) {
 	server, _, cleanup := newTestServer(t)
 	defer cleanup()
 
@@ -49,7 +49,7 @@ scrape_configs:
 	}
 }
 
-func TestCompatImportPrometheusRulesCreatesAlertRules(t *testing.T) {
+func TestEcosystemImportPrometheusRulesCreatesAlertRules(t *testing.T) {
 	server, _, cleanup := newTestServer(t)
 	defer cleanup()
 
@@ -89,7 +89,7 @@ groups:
 	}
 }
 
-func TestCompatImportGrafanaDatasourcesStoresMapping(t *testing.T) {
+func TestEcosystemImportGrafanaDatasourcesStoresMapping(t *testing.T) {
 	server, _, cleanup := newTestServer(t)
 	defer cleanup()
 
@@ -195,7 +195,7 @@ func TestAlertmanagerWebhookReceiverAcceptsPublicPayload(t *testing.T) {
 	}
 }
 
-func TestPrometheusCompatEndpointsReturnStandardShapes(t *testing.T) {
+func TestPrometheusAPIEndpointsReturnStandardShapes(t *testing.T) {
 	server, db, cleanup := newTestServer(t)
 	defer cleanup()
 
@@ -245,7 +245,7 @@ func TestPrometheusCompatEndpointsReturnStandardShapes(t *testing.T) {
 	}
 }
 
-func TestPrometheusCompatAcceptsGrafanaStyleFormAndDurations(t *testing.T) {
+func TestPrometheusAPIAcceptsGrafanaStyleFormAndDurations(t *testing.T) {
 	server, db, cleanup := newTestServer(t)
 	defer cleanup()
 

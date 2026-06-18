@@ -1,4 +1,4 @@
-﻿# GitHub 发布（`gh`）操作手册
+# GitHub 发布（`gh`）操作手册
 
 ## 发布目标
 
@@ -30,7 +30,7 @@ vim CHANGELOG.md
 
 ```bash
 gh release create v0.2.3 \
-  --title "v0.2.3 - Grafana Compatibility, Local Agent API, and Migration Rehearsal" \
+  --title "v0.2.3 - Grafana Ecosystem, Local Agent API, and Migration Rehearsal" \
   --notes-file docs/github-release-notes.md \
   --verify-tag
 ```
@@ -52,7 +52,7 @@ git status --short
 gh release view v0.2.3 >/dev/null && echo "release exists"
 git tag v0.2.3
 gh release create v0.2.3 \
-  --title "v0.2.3 - Grafana Compatibility, Local Agent API, and Migration Rehearsal" \
+  --title "v0.2.3 - Grafana Ecosystem, Local Agent API, and Migration Rehearsal" \
   --notes-file docs/github-release-notes.md \
   --verify-tag \
   docs/ecosystem-integration-guide.md docs/integrations.md

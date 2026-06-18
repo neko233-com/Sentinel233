@@ -928,7 +928,7 @@ function analyzeGrafanaDashboard(dashboard) {
   return report;
 }
 
-function renderGrafanaCompatibilityReport(report) {
+function renderGrafanaIntegrationReport(report) {
   if (!report) return '';
   return `
     <div class="doc-list">
@@ -1199,7 +1199,7 @@ async function renderDashboards() {
           <div><h2>预设仪表盘</h2><p>先从可用模板开始，也可以直接导入 Grafana JSON。</p></div>
           <div>
             <button class="btn btn-secondary" onclick="importGrafanaDialog()">导入 Grafana JSON</button>
-            <button class="btn btn-secondary" onclick="importCompatDialog()">导入生态配置</button>
+            <button class="btn btn-secondary" onclick="importEcosystemDialog()">导入生态配置</button>
             <button class="btn btn-primary" onclick="createDashboardDialog()">新建空白盘</button>
           </div>
         </div>
@@ -1265,19 +1265,19 @@ function importGrafanaDialog() {
       <textarea id="grafana-json" class="json-editor code" placeholder='{"title":"Node Exporter","panels":[...]}'></textarea>
     </div>
     <p class="hint">支持 Grafana 的 panels、targets、gridPos、fieldConfig、templating。导入后会成为 Sentinel233 原生面板定义，并保留 Grafana 元信息用于持续接入治理。</p>
-    <div id="grafana-compatibility"></div>
+    <div id="grafana-integration"></div>
     <div style="display:flex;gap:10px;flex-wrap:wrap">
-      <button class="btn btn-secondary" onclick="previewGrafanaCompatibility()">先做接入检查</button>
+      <button class="btn btn-secondary" onclick="previewGrafanaIntegration()">先做接入检查</button>
       <button class="btn btn-primary" onclick="importGrafanaDashboard()">导入</button>
     </div>
   `);
 }
 
-function previewGrafanaCompatibility() {
+function previewGrafanaIntegration() {
   try {
     const raw = JSON.parse(document.getElementById('grafana-json').value);
     const report = analyzeGrafanaDashboard(raw.dashboard || raw);
-    document.getElementById('grafana-compatibility').innerHTML = renderGrafanaCompatibilityReport(report);
+    document.getElementById('grafana-integration').innerHTML = renderGrafanaIntegrationReport(report);
   } catch (e) {
     toast(`校验失败：${e.message}`);
   }
@@ -1295,39 +1295,39 @@ async function importGrafanaDashboard() {
     const dash = resp.data || {};
     const panels = safeParseJSON(dash.panels, []);
     const layout = safeParseJSON(dash.layout, {});
-    toast(`已导入 ${panels.length} 个 Grafana 面板，接入检查项 ${layout.compatibility?.totalWarnings || 0} 个`);
+    toast(`已导入 ${panels.length} 个 Grafana 面板，接入检查项 ${layout.integration?.totalWarnings || 0} 个`);
     renderDashboards();
   } catch (e) {
     toast(`导入失败：${e.message}`);
   }
 }
 
-function importCompatDialog() {
+function importEcosystemDialog() {
   showModal('导入 Grafana / Prometheus 生态配置', `
     <div class="form-grid">
-      <div class="form-group"><label>格式</label><select id="compat-format">
+      <div class="form-group"><label>格式</label><select id="ecosystem-format">
         <option value="prometheus-config">Prometheus scrape config</option>
         <option value="prometheus-rules">Prometheus rule file</option>
         <option value="grafana-datasources">Grafana datasource provisioning</option>
         <option value="alertmanager-webhook">Alertmanager webhook payload</option>
         <option value="sentinel-dashboard">Sentinel dashboard JSON</option>
       </select></div>
-      <div class="form-group"><label>内容类型</label><select id="compat-content-type">
+      <div class="form-group"><label>内容类型</label><select id="ecosystem-content-type">
         <option value="application/yaml">YAML</option>
         <option value="application/json">JSON</option>
       </select></div>
     </div>
-    <div class="form-group"><label>配置内容</label><textarea id="compat-content" class="json-editor code" placeholder="scrape_configs:\n  - job_name: node\n    static_configs:\n      - targets: ['localhost:9100']"></textarea></div>
+    <div class="form-group"><label>配置内容</label><textarea id="ecosystem-content" class="json-editor code" placeholder="scrape_configs:\n  - job_name: node\n    static_configs:\n      - targets: ['localhost:9100']"></textarea></div>
     <p class="hint">Prometheus scrape/rule、Grafana datasource provisioning 和 Alertmanager webhook 会落成 Sentinel233 的 target、rule 或长期生态接入元数据。</p>
-    <button class="btn btn-primary" onclick="importCompatibilityConfig()">导入配置</button>
+    <button class="btn btn-primary" onclick="importEcosystemConfig()">导入配置</button>
   `);
 }
 
-async function importCompatibilityConfig() {
+async function importEcosystemConfig() {
   if (!requireWriteSession()) return;
-  const format = document.getElementById('compat-format').value;
-  const contentType = document.getElementById('compat-content-type').value;
-  const content = document.getElementById('compat-content').value;
+  const format = document.getElementById('ecosystem-format').value;
+  const contentType = document.getElementById('ecosystem-content-type').value;
+  const content = document.getElementById('ecosystem-content').value;
   try {
     const resp = await api(`/api/ecosystem/import?source=${encodeURIComponent(format)}`, {
       method: 'POST',
@@ -1345,8 +1345,8 @@ async function importCompatibilityConfig() {
 }
 
 function convertGrafanaDashboard(dashboard) {
-  const compatibility = analyzeGrafanaDashboard(dashboard);
-  const compatibilityByID = new Map(compatibility.panels.map(item => [item.id, item]));
+  const integration = analyzeGrafanaDashboard(dashboard);
+  const integrationByID = new Map(integration.panels.map(item => [item.id, item]));
   const panels = flattenGrafanaPanels(dashboard.panels || []).map(panel => {
     const target = (panel.targets || []).find(tg => tg.expr || tg.query) || {};
     const type = grafanaTypeMap[panel.type] || panel.type || 'timeseries';
@@ -1369,7 +1369,7 @@ function convertGrafanaDashboard(dashboard) {
         type: panel.type,
         targets: panel.targets || [],
         transformations: panel.transformations || [],
-        compatibility: compatibilityByID.get(panel.id || 0) || null,
+        integration: integrationByID.get(panel.id || 0) || null,
       },
     });
   });
@@ -1377,7 +1377,7 @@ function convertGrafanaDashboard(dashboard) {
     title: dashboard.title || 'Imported Grafana Dashboard',
     description: dashboard.description || `Imported from Grafana uid ${dashboard.uid || '-'}`,
     panels,
-    layout: { schemaVersion: dashboard.schemaVersion, uid: dashboard.uid, time: dashboard.time || null, compatibility },
+    layout: { schemaVersion: dashboard.schemaVersion, uid: dashboard.uid, time: dashboard.time || null, integration },
     variables: (dashboard.templating?.list || []).map(v => ({
       name: v.name,
       label: v.label || v.name,
@@ -2097,8 +2097,8 @@ window.createDashboard = createDashboard;
 window.createDashboardFromPreset = createDashboardFromPreset;
 window.importGrafanaDialog = importGrafanaDialog;
 window.importGrafanaDashboard = importGrafanaDashboard;
-window.importCompatDialog = importCompatDialog;
-window.importCompatibilityConfig = importCompatibilityConfig;
+window.importEcosystemDialog = importEcosystemDialog;
+window.importEcosystemConfig = importEcosystemConfig;
 window.exportGrafanaDashboard = exportGrafanaDashboard;
 window.deleteDashboard = deleteDashboard;
 window.openDashboard = openDashboard;

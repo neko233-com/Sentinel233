@@ -321,18 +321,18 @@ func parsePrometheusDuration(value string, fallback time.Duration) (time.Duratio
 	if parsed, err := strconv.ParseFloat(text, 64); err == nil {
 		return time.Duration(parsed * float64(time.Second)), nil
 	}
-	return parseCompatDuration(text)
+	return parsePrometheusDurationLiteral(text)
 }
 
 func durationSeconds(value string) float64 {
-	d, err := parseCompatDuration(value)
+	d, err := parsePrometheusDurationLiteral(value)
 	if err != nil {
 		return 0
 	}
 	return d.Seconds()
 }
 
-func parseCompatDuration(value string) (time.Duration, error) {
+func parsePrometheusDurationLiteral(value string) (time.Duration, error) {
 	text := strings.TrimSpace(value)
 	if text == "" {
 		return 0, nil
@@ -436,13 +436,13 @@ func seriesMatchesSelector(labels tsdb.Labels, selector string) bool {
 	return true
 }
 
-type compatLabelMatcher struct {
+type seriesLabelMatcher struct {
 	Name  string
 	Op    string
 	Value string
 }
 
-func parseSeriesSelector(selector string) (string, []compatLabelMatcher) {
+func parseSeriesSelector(selector string) (string, []seriesLabelMatcher) {
 	text := strings.TrimSpace(selector)
 	if text == "" {
 		return "", nil
@@ -456,22 +456,22 @@ func parseSeriesSelector(selector string) (string, []compatLabelMatcher) {
 	if close < open {
 		return metric, nil
 	}
-	return metric, parseCompatLabelMatchers(text[open+1 : close])
+	return metric, parseSeriesLabelMatchers(text[open+1 : close])
 }
 
-func parseCompatLabelMatchers(text string) []compatLabelMatcher {
-	var result []compatLabelMatcher
-	for _, part := range splitCompatCSV(text) {
+func parseSeriesLabelMatchers(text string) []seriesLabelMatcher {
+	var result []seriesLabelMatcher
+	for _, part := range splitSelectorCSV(text) {
 		part = strings.TrimSpace(part)
 		if part == "" {
 			continue
 		}
 		for _, op := range []string{"!~", "=~", "!=", "="} {
 			if idx := strings.Index(part, op); idx > 0 {
-				result = append(result, compatLabelMatcher{
+				result = append(result, seriesLabelMatcher{
 					Name:  strings.TrimSpace(part[:idx]),
 					Op:    op,
-					Value: unquoteCompat(strings.TrimSpace(part[idx+len(op):])),
+					Value: unquoteSelectorValue(strings.TrimSpace(part[idx+len(op):])),
 				})
 				break
 			}
@@ -480,7 +480,7 @@ func parseCompatLabelMatchers(text string) []compatLabelMatcher {
 	return result
 }
 
-func splitCompatCSV(text string) []string {
+func splitSelectorCSV(text string) []string {
 	var parts []string
 	var current strings.Builder
 	quote := byte(0)
@@ -520,7 +520,7 @@ func splitCompatCSV(text string) []string {
 	return parts
 }
 
-func unquoteCompat(value string) string {
+func unquoteSelectorValue(value string) string {
 	if len(value) >= 2 {
 		if unquoted, err := strconv.Unquote(value); err == nil {
 			return unquoted

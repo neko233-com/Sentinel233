@@ -7,19 +7,19 @@ All notable changes to Sentinel233 will be documented in this file.
 ### Added
 - Added first-class `/api/ecosystem/capabilities`, `/api/ecosystem/import`, and `/api/ecosystem/alertmanager/webhook` endpoints for stable Grafana/Prometheus/Alertmanager ecosystem integration.
 - Added `scripts/docker-ecosystem-e2e.ps1` as the primary Docker ecosystem verification script.
-- Added Prometheus-compatible discovery and metadata endpoints including `/api/v1/labels`, `/api/v1/metadata`, `/api/v1/targets/metadata`, `/api/v1/status/tsdb`, `/api/v1/alertmanagers`, and `/api/v1/query_exemplars`.
+- Added Prometheus API discovery and metadata endpoints including `/api/v1/labels`, `/api/v1/metadata`, `/api/v1/targets/metadata`, `/api/v1/status/tsdb`, `/api/v1/alertmanagers`, and `/api/v1/query_exemplars`.
 - Expanded Docker ecosystem E2E validation to cover login, ecosystem imports, remote_write, PromQL, dashboard import/export, and Alertmanager webhook.
 - Added an independent HTML-driven GitHub Pages documentation site under `site/`.
 
 ### Changed
-- Reframed docs, UI copy, CI job names, and verification commands from temporary compatibility/replacement language to stable ecosystem integration language.
+- Reframed docs, UI copy, CI job names, and verification commands from temporary migration language to stable ecosystem integration language.
 - Standardized `/api/v1/query_range` responses to Prometheus matrix shape and allowed GET/POST query forms.
 - Preserved Grafana target objects during dashboard import/export and rendered multiple PromQL targets in dashboard panels.
-- Expanded PromQL compatibility for braced selectors, trailing aggregation grouping, `or/and/unless`, `time`, `timestamp`, `scalar`, `sort`, and `histogram_quantile`.
+- Expanded PromQL coverage for braced selectors, trailing aggregation grouping, `or/and/unless`, `time`, `timestamp`, `scalar`, `sort`, and `histogram_quantile`.
 - Optimized CI and release packaging with Go cache, Docker E2E coverage, and matrixed release builds.
 
 ### Removed
-- Removed legacy ecosystem aliases, old wrapper scripts, and old guide paths so new deployments use only the current ecosystem API and tooling.
+- Removed old ecosystem aliases, old wrapper scripts, and old guide paths so new deployments use only the current ecosystem API and tooling.
 
 ## [v0.2.3] - 2026-06-15
 
@@ -32,7 +32,7 @@ All notable changes to Sentinel233 will be documented in this file.
 - Added SQL-transformed dashboard panels and ECharts renderer support for closer Grafana visual parity.
 
 ### Changed
-- Enhanced Grafana dashboard import/export metadata so imported panels retain compatibility warnings, source PromQL, and renderer hints.
+- Enhanced Grafana dashboard import/export metadata so imported panels retain integration warnings, source PromQL, and renderer hints.
 - Improved dashboard authoring UX with clearer query mode, renderer, and panel configuration semantics.
 
 ### Docs
@@ -48,7 +48,7 @@ All notable changes to Sentinel233 will be documented in this file.
   - Aggregations (sum, avg, min, max, count, stddev, stdvar, topk, bottomk, group)
   - Functions (rate, irate, increase, avg_over_time, min_over_time, max_over_time, sum_over_time, count_over_time, last_over_time, abs, ceil, floor, round, sqrt, ln, log2, log10, exp, clamp_min, clamp_max, delta, deriv, resets, changes, absent, vector)
   - Label matchers (=, !=, =~, !~)
-- Prometheus-compatible HTTP API:
+- Prometheus HTTP API:
   - `/api/v1/query` - instant query
   - `/api/v1/query_range` - range query
   - `/api/v1/series` - series metadata

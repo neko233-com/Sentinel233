@@ -14,7 +14,7 @@ import (
 	"github.com/neko233-com/Sentinel233/internal/store"
 )
 
-const maxCompatImportBodyBytes = 16 << 20
+const maxEcosystemImportBodyBytes = 16 << 20
 
 func (s *Server) handleEcosystemCapabilities(w http.ResponseWriter, r *http.Request) {
 	s.jsonOK(w, map[string]interface{}{
@@ -59,7 +59,7 @@ func (s *Server) handleAlertmanagerWebhookReceiver(w http.ResponseWriter, r *htt
 
 func (s *Server) handleEcosystemImport(w http.ResponseWriter, r *http.Request) {
 	tenantID := s.getTenantID(r)
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxCompatImportBodyBytes))
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxEcosystemImportBodyBytes))
 	if err != nil {
 		s.jsonError(w, "ecosystem import body is too large", http.StatusRequestEntityTooLarge)
 		return
@@ -69,12 +69,12 @@ func (s *Server) handleEcosystemImport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	format, content, err := unwrapCompatImportPayload(r, body)
+	format, content, err := unwrapEcosystemImportPayload(r, body)
 	if err != nil {
 		s.jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	result, err := s.importCompatibilityContent(tenantID, format, content)
+	result, err := s.importEcosystemContent(tenantID, format, content)
 	if err != nil {
 		s.jsonError(w, err.Error(), http.StatusBadRequest)
 		return
@@ -83,12 +83,12 @@ func (s *Server) handleEcosystemImport(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) importAlertmanagerWebhook(w http.ResponseWriter, r *http.Request, tenantID int64, format string) {
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxCompatImportBodyBytes))
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxEcosystemImportBodyBytes))
 	if err != nil {
 		s.jsonError(w, "alertmanager webhook body is too large", http.StatusRequestEntityTooLarge)
 		return
 	}
-	result, err := s.importCompatibilityContent(tenantID, format, body)
+	result, err := s.importEcosystemContent(tenantID, format, body)
 	if err != nil {
 		s.jsonError(w, err.Error(), http.StatusBadRequest)
 		return
@@ -96,7 +96,7 @@ func (s *Server) importAlertmanagerWebhook(w http.ResponseWriter, r *http.Reques
 	s.jsonOK(w, map[string]interface{}{"status": "success", "data": result})
 }
 
-func unwrapCompatImportPayload(r *http.Request, body []byte) (string, []byte, error) {
+func unwrapEcosystemImportPayload(r *http.Request, body []byte) (string, []byte, error) {
 	format := firstNonEmptyString(
 		r.URL.Query().Get("source"),
 		r.URL.Query().Get("format"),
@@ -121,16 +121,16 @@ func unwrapCompatImportPayload(r *http.Request, body []byte) (string, []byte, er
 	}
 
 	if strings.TrimSpace(format) == "" {
-		format = detectCompatFormat(content)
+		format = detectEcosystemFormat(content)
 	}
 	if strings.TrimSpace(format) == "" {
 		return "", nil, fmt.Errorf("ecosystem import source is required when the format cannot be detected")
 	}
-	return normalizeCompatFormat(format), bytes.TrimSpace(content), nil
+	return normalizeEcosystemFormat(format), bytes.TrimSpace(content), nil
 }
 
-func (s *Server) importCompatibilityContent(tenantID int64, format string, content []byte) (map[string]interface{}, error) {
-	format = normalizeCompatFormat(format)
+func (s *Server) importEcosystemContent(tenantID int64, format string, content []byte) (map[string]interface{}, error) {
+	format = normalizeEcosystemFormat(format)
 	switch format {
 	case "grafana-dashboard":
 		payload, err := rawJSONMap(content)
@@ -181,7 +181,7 @@ func (s *Server) importCompatibilityContent(tenantID int64, format string, conte
 	}
 }
 
-func normalizeCompatFormat(format string) string {
+func normalizeEcosystemFormat(format string) string {
 	key := strings.ToLower(strings.TrimSpace(format))
 	key = strings.ReplaceAll(key, "_", "-")
 	switch key {
@@ -202,7 +202,7 @@ func normalizeCompatFormat(format string) string {
 	}
 }
 
-func detectCompatFormat(content []byte) string {
+func detectEcosystemFormat(content []byte) string {
 	if payload, err := rawJSONMap(content); err == nil {
 		if _, ok := payload["dashboard"]; ok {
 			return "grafana-dashboard"
@@ -439,7 +439,7 @@ func (s *Server) importGrafanaDatasources(tenantID int64, content []byte) (map[s
 			entry["sentinelEndpoint"] = "/api/v1"
 			entry["integrationMode"] = "prometheus-http-api"
 		} else if ds.Type != "" {
-			warnings = append(warnings, fmt.Sprintf("Grafana datasource %q type %q is preserved as ecosystem metadata; route it through Prometheus-compatible exporters or native Sentinel ingestion", ds.Name, ds.Type))
+			warnings = append(warnings, fmt.Sprintf("Grafana datasource %q type %q is preserved as ecosystem metadata; route it through Prometheus/OpenMetrics exporters or native Sentinel ingestion", ds.Name, ds.Type))
 		}
 		if len(ds.SecureJsonData) > 0 || ds.BasicAuth {
 			warnings = append(warnings, fmt.Sprintf("Grafana datasource %q contains auth material; Sentinel stores only integration metadata and expects secrets to stay in deployment config", ds.Name))
