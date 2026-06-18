@@ -12,13 +12,13 @@
 |------|------|
 | **自研 TSDB** | WAL 崩溃恢复 + 内存存储 + 自动数据保留清理 |
 | **完整 PromQL** | 瞬时/范围向量、二元运算、聚合(sum/avg/min/max/count/stddev/topk...)、30+ 内置函数(rate/increase/delta/abs/ceil/floor/round/sqrt/log...)、标签匹配(=, !=, =~, !~) |
-| **Prometheus 兼容 API** | `/api/v1/query`、`/api/v1/query_range`、`/api/v1/series`、`/api/v1/labels`、`/api/v1/label/{name}/values`、`/api/v1/metadata`、`/api/v1/targets` |
+| **Prometheus 生态 API** | `/api/v1/query`、`/api/v1/query_range`、`/api/v1/series`、`/api/v1/labels`、`/api/v1/label/{name}/values`、`/api/v1/metadata`、`/api/v1/targets` |
 | **Scrape 采集** | 拉模式采集 + OpenMetrics 解析 + 动态目标管理 |
 | **常用集成预设** | Go、JVM、MySQL、PostgreSQL、Redis、Nginx、Linux node_exporter、Docker/cAdvisor、Kubernetes、Blackbox |
 | **告警引擎** | 规则评估 + pending→firing 状态机 + Webhook 通知 |
 | **独立实现的可落地监控系统** | 一体化的采集、存储、查询、告警、面板与权限体系（无外部依赖）；UI 视觉上借鉴 Grafana 的操作便捷性，但实现链路与数据模型与其不同 |
-| **Dashboard 管理** | 创建/编辑/删除仪表盘、Grafana 导入导出、兼容性预检、动态添加面板 |
-| **生态格式导入** | `/api/compat/import` 可导入 Grafana dashboard/datasource provisioning、Prometheus scrape config/rule file、Alertmanager webhook payload |
+| **Dashboard 管理** | 创建/编辑/删除仪表盘、Grafana 导入导出、接入预检、动态添加面板 |
+| **生态格式导入** | `/api/ecosystem/import` 可导入 Grafana dashboard/datasource provisioning、Prometheus scrape config/rule file、Alertmanager webhook payload |
 | **HTML 文档站** | `site/index.html` 独立驱动 GitHub Pages 文档，不依赖 Markdown 渲染 |
 | **可视化运行时** | Chart.js + ECharts 双渲染器，支持更贴近 Grafana 的图表效果 |
 | **数据变换** | 面板支持 `PromQL` 直出或 `PromQL + SQL` 变换，用于 ECharts 绘制与聚合透视 |
@@ -196,7 +196,7 @@ docker run -d -p 23390:23390 -p 23391:23391 -v sentinel233-data:/data sentinel23
 
 ## API 参考
 
-### Prometheus 兼容 API
+### Prometheus 生态 API
 
 | 端点 | 方法 | 说明 |
 |------|------|------|
@@ -245,16 +245,18 @@ docker run -d -p 23390:23390 -p 23391:23391 -v sentinel233-data:/data sentinel23
 | `/api/dashboards/{id}` | PUT | 更新 |
 | `/api/dashboards/{id}` | DELETE | 删除 |
 
-### 兼容生态导入 API
+### 生态接入 API
 
 | 端点 | 方法 | 说明 |
 |------|------|------|
-| `/api/compat/capabilities` | GET | 查询支持的 Grafana/Prometheus 格式与通道 |
-| `/api/compat/import?source=prometheus-config` | POST | 导入 Prometheus `scrape_configs`，静态目标会落成 Sentinel scrape targets |
-| `/api/compat/import?source=prometheus-rules` | POST | 导入 Prometheus rule file，alert rules 会落成 Sentinel alert rules，recording rules 会保留为元数据 |
-| `/api/compat/import?source=grafana-datasources` | POST | 导入 Grafana datasource provisioning，保存 Prometheus datasource 映射 |
-| `/api/compat/import?source=grafana-dashboard` | POST | 导入 Grafana dashboard JSON |
-| `/api/compat/alertmanager/webhook` | POST | 接收 Alertmanager webhook payload 并保留最近一次 payload |
+| `/api/ecosystem/capabilities` | GET | 查询支持的 Grafana/Prometheus 格式与通道 |
+| `/api/ecosystem/import?source=prometheus-config` | POST | 导入 Prometheus `scrape_configs`，静态目标会落成 Sentinel scrape targets |
+| `/api/ecosystem/import?source=prometheus-rules` | POST | 导入 Prometheus rule file，alert rules 会落成 Sentinel alert rules，recording rules 会保留为元数据 |
+| `/api/ecosystem/import?source=grafana-datasources` | POST | 导入 Grafana datasource provisioning，保存 Prometheus datasource 映射 |
+| `/api/ecosystem/import?source=grafana-dashboard` | POST | 导入 Grafana dashboard JSON |
+| `/api/ecosystem/alertmanager/webhook` | POST | 接收 Alertmanager webhook payload 并保留最近一次 payload |
+
+`/api/compat/*` 仍保留为 legacy alias，已有脚本无需立刻修改；新接入建议统一使用 `/api/ecosystem/*`。
 
 ### Local Agent API
 
@@ -263,8 +265,9 @@ docker run -d -p 23390:23390 -p 23391:23391 -v sentinel233-data:/data sentinel23
 | 端点 | 方法 | 说明 |
 |------|------|------|
 | `/api/local/v1/capabilities` | GET | 返回本机 agent 能力描述 |
-| `/api/local/v1/compat/capabilities` | GET | 返回本机生态格式导入能力 |
-| `/api/local/v1/compat/import` | POST | loopback-only 导入 Grafana/Prometheus 生态配置 |
+| `/api/local/v1/ecosystem/capabilities` | GET | 返回本机生态格式导入能力 |
+| `/api/local/v1/ecosystem/import` | POST | loopback-only 导入 Grafana/Prometheus 生态配置 |
+| `/api/local/v1/compat/*` | GET/POST | legacy alias，保留给旧自动化 |
 | `/api/local/v1/dashboards` | GET | 列出 dashboard |
 | `/api/local/v1/dashboards` | POST | 直接创建 dashboard |
 | `/api/local/v1/dashboards/import` | POST | 直接导入 Grafana 或 Sentinel dashboard JSON |
@@ -338,6 +341,8 @@ curl -X POST http://127.0.0.1:23390/api/local/v1/dashboards/1/panels \
 | `scripts/install.sh` | Linux/macOS Agent 安装 |
 | `scripts/install-server.ps1` | Windows Server 安装 |
 | `scripts/install-server.sh` | Linux/macOS Server 安装 |
+| `scripts/docker-ecosystem-e2e.ps1` | Docker 全链路 Grafana/Prometheus 生态接入验证 |
+| `scripts/docker-grafana-replacement-e2e.ps1` | 旧脚本名 wrapper，转发到 ecosystem E2E |
 | `scripts/dashboard-migrate.ps1` | 批量导入 Grafana dashboard、导出归档并生成校验报告 |
 
 ## 开发
@@ -353,7 +358,7 @@ make verify         # vet + test + lint + workflow 校验 + whitespace 检查
 make smoke          # 构建 + 冒烟测试
 make docker-build   # Docker 构建
 make docker-run     # Docker 启动
-make docker-e2e     # Docker 全链路 Grafana 替代验证
+make docker-e2e     # Docker 全链路 Grafana/Prometheus 生态接入验证
 make docker-e2e-local # 使用本地 Go 二进制打包容器，适合 Docker Hub 暂不可用时验证
 ```
 
@@ -386,14 +391,15 @@ sentinel233-agent [flags]
 | [CHANGELOG.md](CHANGELOG.md) | 版本变更记录 |
 | [configs/sentinel233.yaml.example](configs/sentinel233.yaml.example) | 配置文件示例 |
 | [docs/integrations.md](docs/integrations.md) | 接入与采集方式说明 |
-| [docs/grafana-replacement-guide.md](docs/grafana-replacement-guide.md) | 从 Grafana 迁移到 Sentinel233 的落地指南 |
+| [docs/ecosystem-integration-guide.md](docs/ecosystem-integration-guide.md) | Grafana/Prometheus 生态接入指南 |
+| [docs/grafana-replacement-guide.md](docs/grafana-replacement-guide.md) | 旧链接保留说明 |
 | [docs/github-release-guide.md](docs/github-release-guide.md) | 使用 `gh` 进行发布与文档发布流程 |
 | [docs/github-release-notes.md](docs/github-release-notes.md) | 本次发布说明与可直接发布的 release notes |
 | [site/index.html](site/index.html) | GitHub Pages HTML 文档站入口 |
 
-## Grafana 迁移与 SQL/ECharts 面板
+## Grafana 接入与 SQL/ECharts 面板
 
-- 导入 Grafana JSON 前，Web UI 会先给出兼容性摘要，提示多 target、transformations、复杂 datasource 等需人工复核项。
+- 导入 Grafana JSON 前，Web UI 会先给出接入检查摘要，提示多 target、transformations、复杂 datasource 等需人工复核项。
 - 导入后的面板默认保留原始 Grafana 元信息，并优先用 `ECharts` 贴近原可视化观感。
 - 新增面板时可选择：
   - `PromQL 直出`：适合普通监控曲线、表格、Gauge、Stat。

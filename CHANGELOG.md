@@ -5,12 +5,15 @@ All notable changes to Sentinel233 will be documented in this file.
 ## [Unreleased]
 
 ### Added
-- Added `/api/compat/import` and loopback `/api/local/v1/compat/import` for Grafana dashboard/datasource provisioning, Prometheus scrape config, Prometheus rule file, and Alertmanager webhook payload imports.
+- Added first-class `/api/ecosystem/capabilities`, `/api/ecosystem/import`, and `/api/ecosystem/alertmanager/webhook` endpoints for stable Grafana/Prometheus/Alertmanager ecosystem integration; `/api/compat/*` remains as a legacy alias.
+- Added `scripts/docker-ecosystem-e2e.ps1` as the primary Docker ecosystem verification script while keeping the old Grafana replacement script name as a wrapper.
+- Kept `/api/compat/import` and loopback `/api/local/v1/compat/import` as legacy aliases for existing Grafana/Prometheus automation.
 - Added Prometheus-compatible discovery and metadata endpoints including `/api/v1/labels`, `/api/v1/metadata`, `/api/v1/targets/metadata`, `/api/v1/status/tsdb`, `/api/v1/alertmanagers`, and `/api/v1/query_exemplars`.
-- Added Docker Grafana replacement E2E validation script covering login, ecosystem imports, remote_write, PromQL, dashboard import/export, and Alertmanager webhook.
+- Expanded Docker ecosystem E2E validation to cover login, ecosystem imports, remote_write, PromQL, dashboard import/export, and Alertmanager webhook.
 - Added an independent HTML-driven GitHub Pages documentation site under `site/`.
 
 ### Changed
+- Reframed docs, UI copy, CI job names, and verification commands from temporary compatibility/replacement language to stable ecosystem integration language.
 - Standardized `/api/v1/query_range` responses to Prometheus matrix shape and allowed GET/POST query forms.
 - Preserved Grafana target objects during dashboard import/export and rendered multiple PromQL targets in dashboard panels.
 - Expanded PromQL compatibility for braced selectors, trailing aggregation grouping, `or/and/unless`, `time`, `timestamp`, `scalar`, `sort`, and `histogram_quantile`.

@@ -16,11 +16,17 @@ import (
 
 const maxCompatImportBodyBytes = 16 << 20
 
-func (s *Server) handleCompatCapabilities(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleEcosystemCapabilities(w http.ResponseWriter, r *http.Request) {
 	s.jsonOK(w, map[string]interface{}{
 		"status": "success",
 		"data": map[string]interface{}{
 			"mode": "grafana-prometheus-ecosystem",
+			"stability": map[string]interface{}{
+				"contract":       "stable",
+				"primaryPrefix":  "/api/ecosystem",
+				"localPrefix":    "/api/local/v1/ecosystem",
+				"legacyPrefixes": []string{"/api/compat", "/api/local/v1/compat"},
+			},
 			"formats": []map[string]interface{}{
 				{"id": "grafana-dashboard", "contentTypes": []string{"application/json"}, "result": "dashboard"},
 				{"id": "grafana-datasources", "contentTypes": []string{"application/json", "application/yaml"}, "result": "stored datasource mapping"},
@@ -34,9 +40,9 @@ func (s *Server) handleCompatCapabilities(w http.ResponseWriter, r *http.Request
 				{"id": "remote_write", "endpoint": "/api/v1/write", "direction": "push"},
 				{"id": "prometheus_http_api", "endpoint": "/api/v1/*", "direction": "query"},
 				{"id": "dashboard_import", "endpoint": "/api/dashboards/import", "direction": "control"},
-				{"id": "compat_import", "endpoint": "/api/compat/import", "direction": "control"},
+				{"id": "ecosystem_import", "endpoint": "/api/ecosystem/import", "direction": "control"},
 				{"id": "local_agent", "endpoint": "/api/local/v1/*", "direction": "loopback-control"},
-				{"id": "alertmanager_webhook", "endpoint": "/api/compat/alertmanager/webhook", "direction": "push"},
+				{"id": "alertmanager_webhook", "endpoint": "/api/ecosystem/alertmanager/webhook", "direction": "push"},
 			},
 			"grafanaPanelTypes": []string{"timeseries", "graph", "stat", "gauge", "table", "barchart", "bargauge", "heatmap", "piechart", "histogram", "xychart"},
 			"queryModes":        []string{"promql", "promql+sql"},
@@ -44,8 +50,12 @@ func (s *Server) handleCompatCapabilities(w http.ResponseWriter, r *http.Request
 	})
 }
 
+func (s *Server) handleCompatCapabilities(w http.ResponseWriter, r *http.Request) {
+	s.handleEcosystemCapabilities(w, r)
+}
+
 func (s *Server) handleLocalAgentImportCompatibility(w http.ResponseWriter, r *http.Request) {
-	s.handleImportCompatibility(w, r)
+	s.handleEcosystemImport(w, r)
 }
 
 func (s *Server) handleAlertmanagerWebhookReceiver(w http.ResponseWriter, r *http.Request) {
@@ -53,14 +63,18 @@ func (s *Server) handleAlertmanagerWebhookReceiver(w http.ResponseWriter, r *htt
 }
 
 func (s *Server) handleImportCompatibility(w http.ResponseWriter, r *http.Request) {
+	s.handleEcosystemImport(w, r)
+}
+
+func (s *Server) handleEcosystemImport(w http.ResponseWriter, r *http.Request) {
 	tenantID := s.getTenantID(r)
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxCompatImportBodyBytes))
 	if err != nil {
-		s.jsonError(w, "compat import body is too large", http.StatusRequestEntityTooLarge)
+		s.jsonError(w, "ecosystem import body is too large", http.StatusRequestEntityTooLarge)
 		return
 	}
 	if len(bytes.TrimSpace(body)) == 0 {
-		s.jsonError(w, "empty compatibility import payload", http.StatusBadRequest)
+		s.jsonError(w, "empty ecosystem import payload", http.StatusBadRequest)
 		return
 	}
 
@@ -119,7 +133,7 @@ func unwrapCompatImportPayload(r *http.Request, body []byte) (string, []byte, er
 		format = detectCompatFormat(content)
 	}
 	if strings.TrimSpace(format) == "" {
-		return "", nil, fmt.Errorf("compat import source is required when the format cannot be detected")
+		return "", nil, fmt.Errorf("ecosystem import source is required when the format cannot be detected")
 	}
 	return normalizeCompatFormat(format), bytes.TrimSpace(content), nil
 }
@@ -172,7 +186,7 @@ func (s *Server) importCompatibilityContent(tenantID int64, format string, conte
 	case "alertmanager-webhook":
 		return s.importAlertmanagerPayload(tenantID, content)
 	default:
-		return nil, fmt.Errorf("unsupported compatibility import source %q", format)
+		return nil, fmt.Errorf("unsupported ecosystem import source %q", format)
 	}
 }
 
@@ -431,12 +445,13 @@ func (s *Server) importGrafanaDatasources(tenantID int64, content []byte) (map[s
 			"jsonData":  ds.JsonData,
 		}
 		if strings.EqualFold(ds.Type, "prometheus") {
-			entry["sentinelReplacement"] = "/api/v1"
+			entry["sentinelEndpoint"] = "/api/v1"
+			entry["integrationMode"] = "prometheus-http-api"
 		} else if ds.Type != "" {
-			warnings = append(warnings, fmt.Sprintf("Grafana datasource %q type %q is preserved as metadata; route it through Prometheus-compatible exporters or native Sentinel ingestion", ds.Name, ds.Type))
+			warnings = append(warnings, fmt.Sprintf("Grafana datasource %q type %q is preserved as ecosystem metadata; route it through Prometheus-compatible exporters or native Sentinel ingestion", ds.Name, ds.Type))
 		}
 		if len(ds.SecureJsonData) > 0 || ds.BasicAuth {
-			warnings = append(warnings, fmt.Sprintf("Grafana datasource %q contains auth material; Sentinel stores only compatibility metadata and expects secrets to stay in deployment config", ds.Name))
+			warnings = append(warnings, fmt.Sprintf("Grafana datasource %q contains auth material; Sentinel stores only integration metadata and expects secrets to stay in deployment config", ds.Name))
 		}
 		imported = append(imported, entry)
 	}

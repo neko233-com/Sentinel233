@@ -908,10 +908,10 @@ function analyzeGrafanaDashboard(dashboard) {
     const warnings = [];
     const mappedType = grafanaTypeMap[panel.type] || panel.type || 'timeseries';
     if (!grafanaTypeMap[panel.type] && !['timeseries', 'stat', 'gauge', 'table', 'bar', 'pie', 'scatter', 'heatmap'].includes(mappedType)) {
-      warnings.push(`面板类型 ${panel.type || 'unknown'} 需要人工确认`);
+      warnings.push(`面板类型 ${panel.type || 'unknown'} 需要接入后复核`);
     }
     if ((panel.targets || []).length > 1) warnings.push('存在多个 targets，会保留并并行渲染 PromQL targets');
-    if ((panel.transformations || []).length > 0) warnings.push('存在 transformations，当前保留原配置但不会逐条复刻 Grafana 行为');
+    if ((panel.transformations || []).length > 0) warnings.push('存在 transformations，已保留原配置，需要按团队规则确认转换策略');
     if (panel.datasource && typeof panel.datasource === 'object') warnings.push('datasource 为复杂对象，建议导入后复核变量与数据源映射');
     if (warnings.length === 0) report.fullySupported += 1;
     else if (mappedType) report.partiallySupported += 1;
@@ -932,7 +932,7 @@ function renderGrafanaCompatibilityReport(report) {
   if (!report) return '';
   return `
     <div class="doc-list">
-      <div class="doc-item"><strong>兼容性总览</strong><p>面板 ${report.totalPanels} 个，完全兼容 ${report.fullySupported} 个，需人工复核 ${report.partiallySupported + report.unsupported} 个，告警 ${report.totalWarnings} 项。</p></div>
+      <div class="doc-item"><strong>接入检查总览</strong><p>面板 ${report.totalPanels} 个，可直接落地 ${report.fullySupported} 个，需要接入复核 ${report.partiallySupported + report.unsupported} 个，检查项 ${report.totalWarnings} 项。</p></div>
       ${report.panels.slice(0, 10).map(item => `<div class="doc-item"><strong>${escapeHtml(item.title)}</strong><p>${escapeHtml(item.grafanaType)} -> ${escapeHtml(item.mappedType)}</p><p>${item.warnings.length ? escapeHtml(item.warnings.join('；')) : '可直接落地'}</p></div>`).join('')}
     </div>
   `;
@@ -1264,10 +1264,10 @@ function importGrafanaDialog() {
       <label>Grafana JSON</label>
       <textarea id="grafana-json" class="json-editor code" placeholder='{"title":"Node Exporter","panels":[...]}'></textarea>
     </div>
-    <p class="hint">支持 Grafana 的 panels、targets、gridPos、fieldConfig、templating。导入后会转换成更易读的 Sentinel233 面板定义，并优先走 ECharts 贴近 Grafana 观感。</p>
+    <p class="hint">支持 Grafana 的 panels、targets、gridPos、fieldConfig、templating。导入后会成为 Sentinel233 原生面板定义，并保留 Grafana 元信息用于持续接入治理。</p>
     <div id="grafana-compatibility"></div>
     <div style="display:flex;gap:10px;flex-wrap:wrap">
-      <button class="btn btn-secondary" onclick="previewGrafanaCompatibility()">先校验兼容性</button>
+      <button class="btn btn-secondary" onclick="previewGrafanaCompatibility()">先做接入检查</button>
       <button class="btn btn-primary" onclick="importGrafanaDashboard()">导入</button>
     </div>
   `);
@@ -1295,7 +1295,7 @@ async function importGrafanaDashboard() {
     const dash = resp.data || {};
     const panels = safeParseJSON(dash.panels, []);
     const layout = safeParseJSON(dash.layout, {});
-    toast(`已导入 ${panels.length} 个 Grafana 面板，兼容告警 ${layout.compatibility?.totalWarnings || 0} 项`);
+    toast(`已导入 ${panels.length} 个 Grafana 面板，接入检查项 ${layout.compatibility?.totalWarnings || 0} 个`);
     renderDashboards();
   } catch (e) {
     toast(`导入失败：${e.message}`);
@@ -1318,7 +1318,7 @@ function importCompatDialog() {
       </select></div>
     </div>
     <div class="form-group"><label>配置内容</label><textarea id="compat-content" class="json-editor code" placeholder="scrape_configs:\n  - job_name: node\n    static_configs:\n      - targets: ['localhost:9100']"></textarea></div>
-    <p class="hint">Prometheus scrape/rule、Grafana datasource provisioning 和 Alertmanager webhook 会转换成 Sentinel233 的 target、rule 或兼容元数据。</p>
+    <p class="hint">Prometheus scrape/rule、Grafana datasource provisioning 和 Alertmanager webhook 会落成 Sentinel233 的 target、rule 或长期生态接入元数据。</p>
     <button class="btn btn-primary" onclick="importCompatibilityConfig()">导入配置</button>
   `);
 }
@@ -1329,7 +1329,7 @@ async function importCompatibilityConfig() {
   const contentType = document.getElementById('compat-content-type').value;
   const content = document.getElementById('compat-content').value;
   try {
-    const resp = await api(`/api/compat/import?source=${encodeURIComponent(format)}`, {
+    const resp = await api(`/api/ecosystem/import?source=${encodeURIComponent(format)}`, {
       method: 'POST',
       headers: { 'Content-Type': contentType },
       body: content,

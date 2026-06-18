@@ -64,6 +64,6 @@ jobs:
           go-version: '1.26'
           cache: true
           cache-dependency-path: go.sum
-      - name: Docker Grafana replacement E2E
+      - name: Docker Grafana Prometheus ecosystem E2E
         shell: pwsh
-        run: ./scripts/docker-grafana-replacement-e2e.ps1
+        run: ./scripts/docker-ecosystem-e2e.ps1

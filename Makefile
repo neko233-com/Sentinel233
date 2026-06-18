@@ -68,7 +68,7 @@ docker-stop:
 	docker compose down
 
 docker-e2e:
-	pwsh ./scripts/docker-grafana-replacement-e2e.ps1
+	pwsh ./scripts/docker-ecosystem-e2e.ps1
 
 docker-e2e-local:
-	pwsh ./scripts/docker-grafana-replacement-e2e.ps1 -UseLocalBinary
+	pwsh ./scripts/docker-ecosystem-e2e.ps1 -UseLocalBinary

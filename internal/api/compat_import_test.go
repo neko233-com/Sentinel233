@@ -121,6 +121,58 @@ datasources:
 	}
 }
 
+func TestEcosystemAPIIsPrimaryStableImportPath(t *testing.T) {
+	server, _, cleanup := newTestServer(t)
+	defer cleanup()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/ecosystem/capabilities", nil)
+	req.Header.Set("Authorization", "Bearer "+testLoginToken(t, server))
+	rec := httptest.NewRecorder()
+	server.Router().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("capabilities status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"primaryPrefix":"/api/ecosystem"`) {
+		t.Fatalf("capabilities did not advertise stable ecosystem prefix: %s", rec.Body.String())
+	}
+
+	body := `{"receiver":"sentinel","status":"firing","alerts":[{"labels":{"alertname":"InstanceDown"}}]}`
+	req = httptest.NewRequest(http.MethodPost, "/api/ecosystem/alertmanager/webhook", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+testLoginToken(t, server))
+	rec = httptest.NewRecorder()
+	server.Router().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("ecosystem alertmanager status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestLocalEcosystemImportIsStableLoopbackPath(t *testing.T) {
+	server, _, cleanup := newTestServer(t)
+	defer cleanup()
+
+	body := `
+scrape_configs:
+  - job_name: local-node
+    static_configs:
+      - targets: ["localhost:9100"]
+`
+	req := httptest.NewRequest(http.MethodPost, "/api/local/v1/ecosystem/import?source=prometheus-config", strings.NewReader(body))
+	req.RemoteAddr = "127.0.0.1:12345"
+	req.Header.Set("Content-Type", "application/yaml")
+	rec := httptest.NewRecorder()
+	server.Router().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("local ecosystem import status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	targets, err := server.store.ListScrapeTargets(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(targets) != 1 || targets[0].Name != "local-node/localhost:9100" {
+		t.Fatalf("targets not imported through local ecosystem path: %#v", targets)
+	}
+}
+
 func TestAlertmanagerWebhookReceiverAcceptsPublicPayload(t *testing.T) {
 	server, _, cleanup := newTestServer(t)
 	defer cleanup()
@@ -248,4 +300,11 @@ func TestPrometheusCompatAcceptsGrafanaStyleFormAndDurations(t *testing.T) {
 
 func strconvFormat(v int64) string {
 	return strconv.FormatInt(v, 10)
+}
+
+func testLoginToken(t *testing.T, server *Server) string {
+	t.Helper()
+	token := "test-token"
+	server.tokens[token] = tokenInfo{TenantID: 1, Username: "root", Role: "admin"}
+	return token
 }
