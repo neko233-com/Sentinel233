@@ -14,7 +14,7 @@
 | **完整 PromQL** | 瞬时/范围向量、二元运算、聚合(sum/avg/min/max/count/stddev/topk...)、30+ 内置函数(rate/increase/delta/abs/ceil/floor/round/sqrt/log...)、标签匹配(=, !=, =~, !~) |
 | **Prometheus 生态 API** | `/api/v1/query`、`/api/v1/query_range`、`/api/v1/series`、`/api/v1/labels`、`/api/v1/label/{name}/values`、`/api/v1/metadata`、`/api/v1/targets` |
 | **Scrape 采集** | 拉模式采集 + OpenMetrics 解析 + 动态目标管理 |
-| **常用集成预设** | Go、JVM、MySQL、PostgreSQL、Redis、Nginx、Linux node_exporter、Docker/cAdvisor、Kubernetes、Blackbox |
+| **常用集成预设** | Go、JVM、Linux/Windows、MySQL、PostgreSQL、Redis、Elasticsearch、MongoDB、Kafka、RabbitMQ、Nginx、HAProxy、Docker/cAdvisor、Kubernetes、etcd、MinIO、SNMP、Blackbox、OpenTelemetry Collector |
 | **告警引擎** | 规则评估 + pending→firing 状态机 + Webhook 通知 |
 | **独立实现的可落地监控系统** | 一体化的采集、存储、查询、告警、面板与权限体系（无外部依赖）；UI 视觉上借鉴 Grafana 的操作便捷性，但实现链路与数据模型与其不同 |
 | **Dashboard 管理** | 创建/编辑/删除仪表盘、Grafana 导入导出、接入预检、动态添加面板 |

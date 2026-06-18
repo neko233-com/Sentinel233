@@ -9,10 +9,20 @@ Sentinel233 Server treats Prometheus/OpenMetrics `/metrics` scraping as one inge
 - MySQL mysqld_exporter: MySQL server health, InnoDB, query, connection, and replication metrics.
 - PostgreSQL postgres_exporter: connections, transactions, cache hit ratio, replication, and database health.
 - Redis redis_exporter: memory, clients, commands, hit ratio, slowlog, and persistence status.
+- Elasticsearch elasticsearch_exporter: cluster health, nodes, JVM heap, shards, index docs, and thread pool pressure.
+- MongoDB mongodb_exporter: connections, operations, replication lag, locks, collections, and storage engine metrics.
+- Kafka kafka_exporter plus JMX exporter: brokers, topics, partitions, consumer lag, ISR, controller, and JVM health.
+- RabbitMQ rabbitmq_exporter: queues, messages, consumers, publish/delivery rate, channels, and node health.
 - Nginx nginx-prometheus-exporter: stub_status connection and request metrics.
+- HAProxy haproxy_exporter: frontend/backend sessions, response codes, queue depth, and backend health.
 - Docker/cAdvisor: container CPU, memory, filesystem, and network metrics.
 - Kubernetes kube-state-metrics: nodes, pods, restarts, resource requests, and abnormal states.
+- etcd built-in metrics: leader, raft proposals, backend commit latency, DB size, and peer network.
+- MinIO built-in Prometheus metrics: capacity, drives, S3 requests, errors, and bucket object counts.
+- Windows windows_exporter: CPU, memory, disks, network, services, process, and OS health.
+- Network/SNMP snmp_exporter: interface throughput, errors, device availability, and hardware status.
 - Blackbox exporter: HTTP/TCP/ICMP probing, DNS, TLS certificate expiry, and external latency.
+- OpenTelemetry Collector telemetry: receiver, processor, exporter, queue, refusal, and send-failure metrics.
 - Sentinel233 Go client lib: planned native high-performance client path for richer runtime telemetry.
 
 ## Prometheus remote write
@@ -185,4 +195,64 @@ Blackbox exporter probe endpoint:
 
 ```text
 http://<host>:9115/probe?module=http_2xx&target=https://example.com
+```
+
+Elasticsearch exporter endpoint:
+
+```text
+http://<host>:9114/metrics
+```
+
+MongoDB exporter endpoint:
+
+```text
+http://<host>:9216/metrics
+```
+
+Kafka exporter endpoint:
+
+```text
+http://<host>:9308/metrics
+```
+
+RabbitMQ exporter endpoint:
+
+```text
+http://<host>:9419/metrics
+```
+
+HAProxy exporter endpoint:
+
+```text
+http://<host>:9101/metrics
+```
+
+etcd built-in metrics endpoint:
+
+```text
+http://<host>:2379/metrics
+```
+
+MinIO cluster metrics endpoint:
+
+```text
+http://<host>:9000/minio/v2/metrics/cluster
+```
+
+Windows exporter endpoint:
+
+```text
+http://<host>:9182/metrics
+```
+
+SNMP exporter probe endpoint:
+
+```text
+http://<host>:9116/snmp?target=<device-ip>&module=if_mib
+```
+
+OpenTelemetry Collector telemetry endpoint:
+
+```text
+http://<host>:8888/metrics
 ```
