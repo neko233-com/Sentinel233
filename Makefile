@@ -6,7 +6,7 @@ LDFLAGS  = -s -w \
   -X github.com/neko233-com/Sentinel233/internal/version.Commit=$(COMMIT) \
   -X github.com/neko233-com/Sentinel233/internal/version.Date=$(DATE)
 
-.PHONY: build test test-race lint run-server run-agent clean smoke docker-e2e docker-e2e-local
+.PHONY: build test test-race lint vet verify run-server run-agent clean smoke docker-e2e docker-e2e-local
 
 build:
 	go build -ldflags="$(LDFLAGS)" -o bin/sentinel233-server.exe ./cmd/sentinel233-server
@@ -32,6 +32,10 @@ lint:
 
 vet:
 	go vet ./...
+
+verify: vet test lint
+	powershell -NoProfile -ExecutionPolicy Bypass -File scripts/validate-github-actions.ps1
+	git diff --check
 
 run-server:
 	go run ./cmd/sentinel233-server -addr :23390

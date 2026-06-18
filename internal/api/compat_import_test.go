@@ -192,6 +192,60 @@ func TestPrometheusCompatEndpointsReturnStandardShapes(t *testing.T) {
 	}
 }
 
+func TestPrometheusCompatAcceptsGrafanaStyleFormAndDurations(t *testing.T) {
+	server, db, cleanup := newTestServer(t)
+	defer cleanup()
+
+	now := time.Now().UTC().Truncate(time.Second)
+	for _, item := range []struct {
+		job string
+		ts  time.Time
+	}{
+		{job: "zeta", ts: now.Add(-2 * time.Minute)},
+		{job: "api", ts: now.Add(-time.Minute)},
+		{job: "api", ts: now},
+	} {
+		labels := tsdb.Labels{{Name: "__name__", Value: "http_requests_total"}, {Name: "job", Value: item.job}, {Name: "instance", Value: item.job + ":9090"}}
+		if err := db.Append(labels, item.ts.UnixMilli(), 1); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	body := strings.NewReader("query=http_requests_total&start=" + now.Add(-3*time.Minute).Format(time.RFC3339Nano) + "&end=" + now.Format(time.RFC3339Nano) + "&step=1m")
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/query_range", body)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	server.Router().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("query_range form status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/label/job/values?match[]=http_requests_total", nil)
+	rec = httptest.NewRecorder()
+	server.Router().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("label values status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var labelResp struct {
+		Status string   `json:"status"`
+		Data   []string `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &labelResp); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := strings.Join(labelResp.Data, ","), "api,zeta"; got != want {
+		t.Fatalf("label values = %q, want %q", got, want)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/query", strings.NewReader("query=http_requests_total&time="+strconv.FormatInt(now.UnixMilli(), 10)))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec = httptest.NewRecorder()
+	server.Router().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("query millisecond form status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+}
+
 func strconvFormat(v int64) string {
 	return strconv.FormatInt(v, 10)
 }

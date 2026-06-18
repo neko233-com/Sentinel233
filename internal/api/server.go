@@ -1753,9 +1753,12 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 	}
 	ts := time.Now()
 	if t := requestParam(r, "time"); t != "" {
-		if parsed, err := strconv.ParseFloat(t, 64); err == nil {
-			ts = time.Unix(int64(parsed), 0)
+		parsed, err := parsePrometheusTime(t, ts)
+		if err != nil {
+			s.jsonError(w, err.Error(), http.StatusBadRequest)
+			return
 		}
+		ts = parsed
 	}
 	result, err := s.engine.EvalInstant(expr, ts)
 	if err != nil {
@@ -1780,21 +1783,22 @@ func (s *Server) handleQueryRange(w http.ResponseWriter, r *http.Request) {
 	startStr := requestParam(r, "start")
 	endStr := requestParam(r, "end")
 	stepStr := requestParam(r, "step")
-	start, err := strconv.ParseFloat(startStr, 64)
+	start, err := parsePrometheusTime(startStr, time.Time{})
 	if err != nil {
 		s.jsonError(w, "invalid start", http.StatusBadRequest)
 		return
 	}
-	end, err := strconv.ParseFloat(endStr, 64)
+	end, err := parsePrometheusTime(endStr, time.Time{})
 	if err != nil {
 		s.jsonError(w, "invalid end", http.StatusBadRequest)
 		return
 	}
-	step, err := strconv.ParseFloat(stepStr, 64)
-	if err != nil {
-		step = 15
+	step, err := parsePrometheusDuration(stepStr, 15*time.Second)
+	if err != nil || step <= 0 {
+		s.jsonError(w, "invalid step", http.StatusBadRequest)
+		return
 	}
-	results, err := s.engine.EvalRange(expr, time.Unix(int64(start), 0), time.Unix(int64(end), 0), time.Duration(step*float64(time.Second)))
+	results, err := s.engine.EvalRange(expr, start, end, step)
 	if err != nil {
 		s.jsonError(w, err.Error(), http.StatusBadRequest)
 		return
@@ -1830,6 +1834,7 @@ func (s *Server) handleLabelValues(w http.ResponseWriter, r *http.Request) {
 			values = append(values, v)
 		}
 	}
+	sort.Strings(values)
 	s.jsonOK(w, map[string]interface{}{"status": "success", "data": values})
 }
 

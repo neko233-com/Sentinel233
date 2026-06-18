@@ -294,6 +294,36 @@ func intFromParam(value string, fallback int) int {
 	return parsed
 }
 
+func parsePrometheusTime(value string, fallback time.Time) (time.Time, error) {
+	text := strings.TrimSpace(value)
+	if text == "" {
+		return fallback, nil
+	}
+	if parsed, err := strconv.ParseFloat(text, 64); err == nil {
+		if parsed > 1e11 {
+			return time.UnixMilli(int64(parsed)), nil
+		}
+		seconds := int64(parsed)
+		nanos := int64((parsed - float64(seconds)) * 1e9)
+		return time.Unix(seconds, nanos), nil
+	}
+	if ts, err := time.Parse(time.RFC3339Nano, text); err == nil {
+		return ts, nil
+	}
+	return time.Time{}, fmt.Errorf("invalid timestamp %q", value)
+}
+
+func parsePrometheusDuration(value string, fallback time.Duration) (time.Duration, error) {
+	text := strings.TrimSpace(value)
+	if text == "" {
+		return fallback, nil
+	}
+	if parsed, err := strconv.ParseFloat(text, 64); err == nil {
+		return time.Duration(parsed * float64(time.Second)), nil
+	}
+	return parseCompatDuration(text)
+}
+
 func durationSeconds(value string) float64 {
 	d, err := parseCompatDuration(value)
 	if err != nil {

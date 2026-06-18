@@ -271,9 +271,18 @@ groups:
     throw "query_range did not return matrix data: $($range | ConvertTo-Json -Depth 20)"
   }
 
+  $rfcStart = [uri]::EscapeDataString(([DateTimeOffset]::FromUnixTimeSeconds($start)).UtcDateTime.ToString("o"))
+  $rfcEnd = [uri]::EscapeDataString(([DateTimeOffset]::FromUnixTimeSeconds($now)).UtcDateTime.ToString("o"))
+  $rangeDurationStep = Invoke-JsonApi -Method "GET" -Url "$BaseUrl/api/v1/query_range?query=$query&start=$rfcStart&end=$rfcEnd&step=1m"
+  Assert-Success $rangeDurationStep "query_range duration step"
+
   $labels = Invoke-JsonApi -Method "GET" -Url "$BaseUrl/api/v1/labels?match[]=http_requests_total"
   Assert-Success $labels "labels"
   if (@($labels.data) -notcontains "job") { throw "labels endpoint did not expose job label" }
+
+  $jobValues = Invoke-JsonApi -Method "GET" -Url "$BaseUrl/api/v1/label/job/values?match[]=http_requests_total"
+  Assert-Success $jobValues "label values"
+  if (@($jobValues.data) -notcontains "api") { throw "label values endpoint did not expose api job" }
 
   $metadata = Invoke-JsonApi -Method "GET" -Url "$BaseUrl/api/v1/metadata?metric=http_requests_total"
   Assert-Success $metadata "metadata"

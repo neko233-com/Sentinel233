@@ -1,7 +1,8 @@
 # Sentinel233 Server
 
 [![CI](https://github.com/neko233-com/Sentinel233/actions/workflows/ci.yml/badge.svg)](https://github.com/neko233-com/Sentinel233/actions/workflows/ci.yml)
-[![Lint](https://github.com/neko233-com/Sentinel233/actions/workflows/lint.yml/badge.svg)](https://github.com/neko233-com/Sentinel233/actions/workflows/lint.yml)
+[![Docs Pages](https://github.com/neko233-com/Sentinel233/actions/workflows/pages.yml/badge.svg)](https://github.com/neko233-com/Sentinel233/actions/workflows/pages.yml)
+[![Release](https://github.com/neko233-com/Sentinel233/actions/workflows/release.yml/badge.svg)](https://github.com/neko233-com/Sentinel233/actions/workflows/release.yml)
 
 **存储 + 监控一体化监控面板服务器**。`sentinel233-server` = Prometheus Agent + Grafana + 原生 Sentinel client ingestion，100 台游戏服务器只需一台 Sentinel233 Server，极大降低监控运维成本。
 
@@ -11,7 +12,7 @@
 |------|------|
 | **自研 TSDB** | WAL 崩溃恢复 + 内存存储 + 自动数据保留清理 |
 | **完整 PromQL** | 瞬时/范围向量、二元运算、聚合(sum/avg/min/max/count/stddev/topk...)、30+ 内置函数(rate/increase/delta/abs/ceil/floor/round/sqrt/log...)、标签匹配(=, !=, =~, !~) |
-| **Prometheus 兼容 API** | `/api/v1/query`、`/api/v1/query_range`、`/api/v1/series`、`/api/v1/labels`、`/api/v1/metadata`、`/api/v1/targets` |
+| **Prometheus 兼容 API** | `/api/v1/query`、`/api/v1/query_range`、`/api/v1/series`、`/api/v1/labels`、`/api/v1/label/{name}/values`、`/api/v1/metadata`、`/api/v1/targets` |
 | **Scrape 采集** | 拉模式采集 + OpenMetrics 解析 + 动态目标管理 |
 | **常用集成预设** | Go、JVM、MySQL、PostgreSQL、Redis、Nginx、Linux node_exporter、Docker/cAdvisor、Kubernetes、Blackbox |
 | **告警引擎** | 规则评估 + pending→firing 状态机 + Webhook 通知 |
@@ -219,6 +220,12 @@ docker run -d -p 23390:23390 -p 23391:23391 -v sentinel233-data:/data sentinel23
 
 `/api/v1/write` 会保留 Prometheus 侧原始 labels 并写入内置 TSDB，适合把现有 Prometheus agent、Grafana Agent、Alloy 或其他 remote_write sender 指向 Sentinel233 Server。
 
+查询兼容性细节：
+
+- `query`、`query_range` 支持 GET query string 与 POST `application/x-www-form-urlencoded`，贴合 Grafana datasource 和 Prometheus HTTP API 客户端。
+- `time`、`start`、`end` 支持 Unix 秒、Unix 毫秒和 RFC3339/RFC3339Nano；`step` 支持数字秒与 `15s`、`1m`、`1h` 等 Prometheus duration。
+- `/api/v1/label/{name}/values` 返回稳定排序结果，适合 Grafana `label_values()` 变量。
+
 ### Sentinel 原生写入 API
 
 | 端点 | 方法 | 说明 |
@@ -342,6 +349,7 @@ make build          # 构建二进制
 make run-server     # 启动开发服务器
 make run-agent      # 启动 Agent
 make lint           # golangci-lint
+make verify         # vet + test + lint + workflow 校验 + whitespace 检查
 make smoke          # 构建 + 冒烟测试
 make docker-build   # Docker 构建
 make docker-run     # Docker 启动
