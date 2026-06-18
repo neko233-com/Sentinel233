@@ -6,7 +6,7 @@ LDFLAGS  = -s -w \
   -X github.com/neko233-com/Sentinel233/internal/version.Commit=$(COMMIT) \
   -X github.com/neko233-com/Sentinel233/internal/version.Date=$(DATE)
 
-.PHONY: build test test-race lint run-server run-agent clean smoke
+.PHONY: build test test-race lint run-server run-agent clean smoke docker-e2e docker-e2e-local
 
 build:
 	go build -ldflags="$(LDFLAGS)" -o bin/sentinel233-server.exe ./cmd/sentinel233-server
@@ -62,3 +62,9 @@ docker-run:
 
 docker-stop:
 	docker compose down
+
+docker-e2e:
+	pwsh ./scripts/docker-grafana-replacement-e2e.ps1
+
+docker-e2e-local:
+	pwsh ./scripts/docker-grafana-replacement-e2e.ps1 -UseLocalBinary

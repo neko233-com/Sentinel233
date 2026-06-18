@@ -95,16 +95,17 @@ func (e *Engine) eval(node Node, ts, _ time.Time) (Result, error) {
 }
 
 func (e *Engine) evalVectorSelector(sel *VectorSelector, ts time.Time) (Result, error) {
-	matcher := buildMatcher(sel.LabelMatchers)
+	matcher := buildSelectorMatcher(sel.Name, sel.LabelMatchers)
 	series := e.db.QueryByMatcher(matcher, 0, ts.UnixMilli())
 
 	var vector Vector
 	for _, s := range series {
-		samples := s.Samples()
+		samples := s.Range(0, ts.UnixMilli())
 		if len(samples) == 0 {
 			continue
 		}
 		latest := samples[len(samples)-1]
+		latest.Timestamp = ts.UnixMilli()
 		vector = append(vector, Sample{
 			Labels: s.Labels,
 			Point:  latest,
@@ -114,7 +115,7 @@ func (e *Engine) evalVectorSelector(sel *VectorSelector, ts time.Time) (Result, 
 }
 
 func (e *Engine) evalMatrixSelector(sel *MatrixSelector, ts time.Time) (Result, error) {
-	matcher := buildMatcher(sel.LabelMatchers)
+	matcher := buildSelectorMatcher(sel.Name, sel.LabelMatchers)
 	mint := ts.Add(-sel.Range).UnixMilli()
 	maxt := ts.UnixMilli()
 	series := e.db.QueryByMatcher(matcher, mint, maxt)
@@ -167,6 +168,36 @@ func (e *Engine) evalBinary(expr *BinaryExpr, ts time.Time) (Result, error) {
 	}
 
 	if lr.Type == ValueInstantVector && rr.Type == ValueInstantVector {
+		switch expr.Op {
+		case "or":
+			seen := make(map[string]bool)
+			result := make(Vector, 0, len(lr.Vector)+len(rr.Vector))
+			for _, sample := range lr.Vector {
+				key := labelKey(sample.Labels)
+				seen[key] = true
+				result = append(result, sample)
+			}
+			for _, sample := range rr.Vector {
+				key := labelKey(sample.Labels)
+				if !seen[key] {
+					result = append(result, sample)
+				}
+			}
+			return Result{Type: ValueInstantVector, Vector: result}, nil
+		case "and", "unless":
+			rightMap := make(map[string]Sample)
+			for _, s := range rr.Vector {
+				rightMap[labelKey(s.Labels)] = s
+			}
+			var result Vector
+			for _, ls := range lr.Vector {
+				_, ok := rightMap[labelKey(ls.Labels)]
+				if (expr.Op == "and" && ok) || (expr.Op == "unless" && !ok) {
+					result = append(result, ls)
+				}
+			}
+			return Result{Type: ValueInstantVector, Vector: result}, nil
+		}
 		rightMap := make(map[string]Sample)
 		for _, s := range rr.Vector {
 			rightMap[labelKey(s.Labels)] = s
@@ -292,13 +323,70 @@ func (e *Engine) evalCall(call *Call, ts time.Time) (Result, error) {
 	case "absent":
 		return e.callAbsent(call, ts)
 	case "vector":
+		if len(call.Args) == 0 {
+			return Result{}, fmt.Errorf("vector requires scalar argument")
+		}
+		arg, err := e.eval(call.Args[0], ts, ts)
+		if err != nil {
+			return Result{}, err
+		}
+		value := arg.Scalar
+		if arg.Type == ValueInstantVector && len(arg.Vector) > 0 {
+			value = arg.Vector[0].Point.Value
+		}
 		return Result{
 			Type: ValueInstantVector,
 			Vector: Vector{{
 				Labels: nil,
-				Point:  tsdb.Sample{Timestamp: ts.UnixMilli(), Value: call.Args[0].(*NumberLiteral).Value},
+				Point:  tsdb.Sample{Timestamp: ts.UnixMilli(), Value: value},
 			}},
 		}, nil
+	case "scalar":
+		if len(call.Args) == 0 {
+			return Result{}, fmt.Errorf("scalar requires argument")
+		}
+		arg, err := e.eval(call.Args[0], ts, ts)
+		if err != nil {
+			return Result{}, err
+		}
+		if arg.Type == ValueScalar {
+			return arg, nil
+		}
+		if len(arg.Vector) == 1 {
+			return Result{Type: ValueScalar, Scalar: arg.Vector[0].Point.Value}, nil
+		}
+		return Result{Type: ValueScalar, Scalar: math.NaN()}, nil
+	case "time":
+		return Result{Type: ValueScalar, Scalar: float64(ts.Unix())}, nil
+	case "timestamp":
+		if len(call.Args) == 0 {
+			return Result{}, fmt.Errorf("timestamp requires argument")
+		}
+		inner, err := e.eval(call.Args[0], ts, ts)
+		if err != nil {
+			return Result{}, err
+		}
+		for i := range inner.Vector {
+			inner.Vector[i].Point.Value = float64(inner.Vector[i].Point.Timestamp) / 1000
+		}
+		return inner, nil
+	case "sort", "sort_desc":
+		if len(call.Args) == 0 {
+			return Result{}, fmt.Errorf("sort requires argument")
+		}
+		inner, err := e.eval(call.Args[0], ts, ts)
+		if err != nil {
+			return Result{}, err
+		}
+		sort.Slice(inner.Vector, func(i, j int) bool {
+			if strings.EqualFold(call.Func, "sort_desc") {
+				return inner.Vector[i].Point.Value > inner.Vector[j].Point.Value
+			}
+			return inner.Vector[i].Point.Value < inner.Vector[j].Point.Value
+		})
+		return inner, nil
+	case "histogram_quantile":
+		return e.callHistogramQuantile(call, ts)
 	default:
 		return Result{}, fmt.Errorf("unknown function: %s", call.Func)
 	}
@@ -550,6 +638,96 @@ func (e *Engine) callAbsent(call *Call, ts time.Time) (Result, error) {
 	return Result{Type: ValueInstantVector, Vector: nil}, nil
 }
 
+func (e *Engine) callHistogramQuantile(call *Call, ts time.Time) (Result, error) {
+	if len(call.Args) < 2 {
+		return Result{}, fmt.Errorf("histogram_quantile requires quantile and bucket vector arguments")
+	}
+	quantileResult, err := e.eval(call.Args[0], ts, ts)
+	if err != nil {
+		return Result{}, err
+	}
+	q := quantileResult.Scalar
+	if quantileResult.Type == ValueInstantVector && len(quantileResult.Vector) > 0 {
+		q = quantileResult.Vector[0].Point.Value
+	}
+	if math.IsNaN(q) || q < 0 || q > 1 {
+		return Result{Type: ValueInstantVector, Vector: nil}, nil
+	}
+	buckets, err := e.eval(call.Args[1], ts, ts)
+	if err != nil {
+		return Result{}, err
+	}
+	type bucket struct {
+		upper float64
+		value float64
+	}
+	grouped := make(map[string][]bucket)
+	groupLabels := make(map[string]tsdb.Labels)
+	for _, sample := range buckets.Vector {
+		le := sample.Labels.Get("le")
+		if le == "" {
+			continue
+		}
+		upper, err := strconv.ParseFloat(le, 64)
+		if err != nil {
+			if strings.EqualFold(le, "+Inf") || strings.EqualFold(le, "Inf") {
+				upper = math.Inf(1)
+			} else {
+				continue
+			}
+		}
+		labels := labelsWithout(sample.Labels, "le")
+		key := labelKey(labels)
+		grouped[key] = append(grouped[key], bucket{upper: upper, value: sample.Point.Value})
+		groupLabels[key] = labels
+	}
+	var result Vector
+	for key, group := range grouped {
+		sort.Slice(group, func(i, j int) bool { return group[i].upper < group[j].upper })
+		if len(group) == 0 {
+			continue
+		}
+		total := group[len(group)-1].value
+		if total <= 0 {
+			continue
+		}
+		rank := q * total
+		prevUpper := 0.0
+		prevValue := 0.0
+		value := group[len(group)-1].upper
+		for _, item := range group {
+			if item.value >= rank {
+				if math.IsInf(item.upper, 1) {
+					value = prevUpper
+				} else if item.value <= prevValue {
+					value = item.upper
+				} else {
+					fraction := (rank - prevValue) / (item.value - prevValue)
+					value = prevUpper + (item.upper-prevUpper)*fraction
+				}
+				break
+			}
+			prevUpper = item.upper
+			prevValue = item.value
+		}
+		result = append(result, Sample{
+			Labels: groupLabels[key],
+			Point:  tsdb.Sample{Timestamp: ts.UnixMilli(), Value: value},
+		})
+	}
+	return Result{Type: ValueInstantVector, Vector: result}, nil
+}
+
+func buildSelectorMatcher(name string, matchers []LabelMatcher) tsdb.MultiMatcher {
+	if strings.TrimSpace(name) == "" {
+		return buildMatcher(matchers)
+	}
+	next := make([]LabelMatcher, 0, len(matchers)+1)
+	next = append(next, LabelMatcher{Type: MatchEqual, Name: "__name__", Value: name})
+	next = append(next, matchers...)
+	return buildMatcher(next)
+}
+
 func buildMatcher(matchers []LabelMatcher) tsdb.MultiMatcher {
 	var mm tsdb.MultiMatcher
 	for _, m := range matchers {
@@ -603,6 +781,20 @@ func filterLabels(labels tsdb.Labels, keep []string) tsdb.Labels {
 				result = append(result, l)
 				break
 			}
+		}
+	}
+	return result
+}
+
+func labelsWithout(labels tsdb.Labels, drop ...string) tsdb.Labels {
+	dropped := make(map[string]bool, len(drop))
+	for _, name := range drop {
+		dropped[name] = true
+	}
+	result := make(tsdb.Labels, 0, len(labels))
+	for _, label := range labels {
+		if !dropped[label.Name] {
+			result = append(result, label)
 		}
 	}
 	return result

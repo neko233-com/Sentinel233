@@ -4,6 +4,7 @@ data/
 *.exe
 *.test
 *.out
+.tmp-docker-e2e/
 .env
 .DS_Store
 Thumbs.db

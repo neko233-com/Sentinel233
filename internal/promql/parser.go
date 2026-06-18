@@ -128,6 +128,11 @@ func (p *parser) parsePrimary() (Node, error) {
 		return &ParenExpr{Expr: inner}, nil
 	}
 
+	// braced vector selector without a metric name, for example {job="api"}.
+	if ch == '{' {
+		return p.parseMetricSelector("")
+	}
+
 	// number literal
 	if (ch >= '0' && ch <= '9') || ch == '.' {
 		return p.parseNumber()
@@ -390,6 +395,24 @@ func (p *parser) parseAgg(op string) (Node, error) {
 		p.pos++
 	}
 
+	// PromQL allows both sum by (job) (...) and sum(...) by (job).
+	p.skipSpace()
+	if p.pos < len(p.input) {
+		nextWord := p.peekWord()
+		switch nextWord {
+		case "by":
+			p.pos += 2
+			p.skipSpace()
+			grouping, _ = p.parseGrouping()
+			without = false
+		case "without":
+			p.pos += 7
+			p.skipSpace()
+			without = true
+			grouping, _ = p.parseGrouping()
+		}
+	}
+
 	// handle topk/bottomk with extra arg
 	_ = without
 
@@ -554,6 +577,7 @@ var knownFunctions = map[string]bool{
 	"sort": true, "sort_desc": true,
 	"label_replace": true, "label_join": true,
 	"timestamp": true, "time": true,
+	"histogram_quantile": true,
 }
 
 func isFunction(name string) bool {

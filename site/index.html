@@ -1,0 +1,624 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Sentinel233: Prometheus compatible ingestion, Grafana dashboard migration, native dashboards, alerting, and Docker verified operations.">
+  <title>Sentinel233 Docs</title>
+  <style>
+    :root {
+      --bg: #07090d;
+      --ink: #f5f7fb;
+      --muted: #a7b0c0;
+      --dim: #6f7b8e;
+      --line: rgba(255,255,255,.12);
+      --line-strong: rgba(255,255,255,.22);
+      --panel: rgba(15,20,29,.72);
+      --accent: #3ee6a8;
+      --accent-2: #55c7ff;
+      --warn: #ffd166;
+      --danger: #ff6b8a;
+      --max: 1180px;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--bg);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.5;
+    }
+    a { color: inherit; text-decoration: none; }
+    button, code { font: inherit; }
+    code, pre {
+      font-family: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+    }
+
+    .progress {
+      position: fixed;
+      inset: 0 auto auto 0;
+      width: 0;
+      height: 3px;
+      z-index: 80;
+      background: linear-gradient(90deg, var(--accent), var(--accent-2));
+      box-shadow: 0 0 22px rgba(62,230,168,.45);
+    }
+
+    .topbar {
+      position: fixed;
+      inset: 0 0 auto;
+      z-index: 70;
+      display: flex;
+      justify-content: center;
+      border-bottom: 1px solid var(--line);
+      background: rgba(7,9,13,.76);
+      backdrop-filter: blur(18px);
+    }
+    .topbar-inner {
+      width: min(var(--max), calc(100% - 32px));
+      min-height: 64px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-weight: 800;
+    }
+    .mark {
+      width: 32px;
+      height: 32px;
+      display: grid;
+      place-items: center;
+      border: 1px solid rgba(62,230,168,.5);
+      border-radius: 8px;
+      color: #06110d;
+      background: linear-gradient(135deg, var(--accent), var(--accent-2));
+      box-shadow: 0 0 28px rgba(62,230,168,.2);
+    }
+    nav {
+      display: flex;
+      align-items: center;
+      gap: 18px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    nav a { transition: color .18s ease; }
+    nav a:hover, nav a.active { color: var(--ink); }
+    .nav-action {
+      min-height: 34px;
+      display: inline-flex;
+      align-items: center;
+      border: 1px solid var(--line-strong);
+      border-radius: 8px;
+      padding: 0 12px;
+      color: var(--ink);
+      background: rgba(255,255,255,.04);
+    }
+
+    .hero {
+      position: relative;
+      min-height: 100svh;
+      display: grid;
+      align-items: end;
+      overflow: hidden;
+      border-bottom: 1px solid var(--line);
+    }
+    #hero-canvas {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      opacity: .92;
+    }
+    .hero::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background:
+        linear-gradient(90deg, rgba(7,9,13,.92) 0%, rgba(7,9,13,.64) 45%, rgba(7,9,13,.16) 100%),
+        linear-gradient(0deg, var(--bg) 0%, rgba(7,9,13,.2) 42%, rgba(7,9,13,.74) 100%);
+      pointer-events: none;
+    }
+    .hero-content {
+      position: relative;
+      z-index: 1;
+      width: min(var(--max), calc(100% - 32px));
+      margin: 0 auto;
+      padding: 132px 0 82px;
+    }
+    .eyebrow {
+      color: var(--accent);
+      font-size: 13px;
+      font-weight: 800;
+      text-transform: uppercase;
+    }
+    h1 {
+      margin: 14px 0 0;
+      max-width: 820px;
+      font-size: clamp(52px, 9vw, 132px);
+      line-height: .88;
+      letter-spacing: 0;
+    }
+    .hero-copy {
+      max-width: 650px;
+      margin-top: 24px;
+      color: #d8dee8;
+      font-size: clamp(18px, 2vw, 23px);
+    }
+    .hero-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-top: 30px;
+    }
+    .button {
+      min-height: 44px;
+      display: inline-flex;
+      align-items: center;
+      gap: 9px;
+      border: 1px solid var(--line-strong);
+      border-radius: 8px;
+      padding: 0 16px;
+      background: rgba(255,255,255,.04);
+      color: var(--ink);
+      transition: transform .18s ease, border-color .18s ease, background .18s ease;
+    }
+    .button:hover { transform: translateY(-2px); border-color: rgba(62,230,168,.6); background: rgba(62,230,168,.08); }
+    .button.primary {
+      border-color: rgba(62,230,168,.72);
+      color: #06110d;
+      background: var(--accent);
+      font-weight: 800;
+    }
+    .hero-proof {
+      margin-top: 58px;
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      border-top: 1px solid var(--line);
+      border-bottom: 1px solid var(--line);
+    }
+    .proof-item {
+      padding: 20px 18px;
+      border-right: 1px solid var(--line);
+    }
+    .proof-item:last-child { border-right: 0; }
+    .proof-item strong { display: block; font-size: 20px; }
+    .proof-item span { display: block; margin-top: 4px; color: var(--muted); font-size: 13px; }
+
+    main { position: relative; }
+    section {
+      width: min(var(--max), calc(100% - 32px));
+      margin: 0 auto;
+      padding: 92px 0;
+      border-bottom: 1px solid var(--line);
+    }
+    .section-head {
+      display: grid;
+      grid-template-columns: minmax(0, .82fr) minmax(280px, .42fr);
+      gap: 44px;
+      align-items: end;
+      margin-bottom: 34px;
+    }
+    h2 {
+      margin: 0;
+      font-size: clamp(34px, 5vw, 68px);
+      line-height: .98;
+      letter-spacing: 0;
+    }
+    .section-head p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 16px;
+    }
+
+    .matrix {
+      border-top: 1px solid var(--line-strong);
+    }
+    .matrix-row {
+      display: grid;
+      grid-template-columns: minmax(220px, .7fr) minmax(0, 1.4fr) 112px;
+      gap: 20px;
+      align-items: center;
+      padding: 18px 0;
+      border-bottom: 1px solid var(--line);
+    }
+    .matrix-row strong { font-size: 18px; }
+    .matrix-row p { margin: 0; color: var(--muted); }
+    .status {
+      justify-self: end;
+      border: 1px solid rgba(62,230,168,.42);
+      border-radius: 999px;
+      padding: 5px 10px;
+      color: #bfffe5;
+      background: rgba(62,230,168,.08);
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      border-top: 1px solid var(--line-strong);
+      border-bottom: 1px solid var(--line);
+    }
+    .flow-step {
+      min-height: 230px;
+      padding: 24px 20px;
+      border-right: 1px solid var(--line);
+    }
+    .flow-step:last-child { border-right: 0; }
+    .flow-step span { color: var(--accent); font-size: 12px; font-weight: 900; }
+    .flow-step h3 { margin: 12px 0 10px; font-size: 22px; }
+    .flow-step p { margin: 0; color: var(--muted); }
+
+    .terminal {
+      border: 1px solid var(--line-strong);
+      border-radius: 10px;
+      overflow: hidden;
+      background: rgba(2,5,10,.78);
+      box-shadow: 0 30px 80px rgba(0,0,0,.28);
+    }
+    .terminal-bar {
+      min-height: 42px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 0 12px 0 16px;
+      border-bottom: 1px solid var(--line);
+      color: var(--dim);
+      font-size: 12px;
+    }
+    .copy {
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      padding: 5px 9px;
+      color: var(--ink);
+      background: rgba(255,255,255,.04);
+      cursor: pointer;
+    }
+    pre {
+      margin: 0;
+      padding: 20px;
+      overflow: auto;
+      color: #d9fbe8;
+      font-size: 13px;
+      line-height: 1.7;
+    }
+
+    .api-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0 34px;
+      border-top: 1px solid var(--line-strong);
+    }
+    .api-row {
+      display: grid;
+      grid-template-columns: 92px minmax(0, 1fr);
+      gap: 14px;
+      padding: 14px 0;
+      border-bottom: 1px solid var(--line);
+    }
+    .method {
+      color: var(--accent-2);
+      font-size: 12px;
+      font-weight: 900;
+    }
+    .api-row code { color: var(--ink); overflow-wrap: anywhere; }
+    .api-row span { display: block; margin-top: 3px; color: var(--dim); font-size: 12px; }
+
+    .split {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(320px, .72fr);
+      gap: 34px;
+      align-items: stretch;
+    }
+    .checklist {
+      border-top: 1px solid var(--line-strong);
+    }
+    .check {
+      display: grid;
+      grid-template-columns: 28px minmax(0, 1fr);
+      gap: 14px;
+      padding: 15px 0;
+      border-bottom: 1px solid var(--line);
+      color: var(--muted);
+    }
+    .check b {
+      width: 24px;
+      height: 24px;
+      display: grid;
+      place-items: center;
+      border-radius: 50%;
+      color: #06110d;
+      background: var(--accent);
+      font-size: 13px;
+    }
+
+    .release {
+      min-height: 280px;
+      display: grid;
+      align-content: center;
+      border: 1px solid var(--line-strong);
+      border-radius: 12px;
+      padding: 34px;
+      background:
+        linear-gradient(135deg, rgba(62,230,168,.12), transparent 42%),
+        rgba(255,255,255,.03);
+    }
+    .release h3 { margin: 0; font-size: 30px; line-height: 1.05; }
+    .release p { color: var(--muted); }
+    footer {
+      width: min(var(--max), calc(100% - 32px));
+      margin: 0 auto;
+      padding: 38px 0 58px;
+      display: flex;
+      justify-content: space-between;
+      gap: 20px;
+      color: var(--dim);
+      font-size: 13px;
+    }
+
+    .reveal {
+      opacity: 0;
+      transform: translateY(24px);
+      transition: opacity .6s ease, transform .6s ease;
+    }
+    .reveal.visible { opacity: 1; transform: translateY(0); }
+
+    @media (max-width: 900px) {
+      nav a:not(.nav-action) { display: none; }
+      .hero-proof, .flow, .section-head, .split, .api-grid { grid-template-columns: 1fr; }
+      .proof-item, .flow-step { border-right: 0; border-bottom: 1px solid var(--line); }
+      .matrix-row { grid-template-columns: 1fr; }
+      .status { justify-self: start; }
+      section { padding: 66px 0; }
+    }
+  </style>
+</head>
+<body>
+  <div class="progress" id="progress"></div>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="brand" href="#top"><span class="mark">S</span><span>Sentinel233 Docs</span></a>
+      <nav>
+        <a href="#matrix">能力矩阵</a>
+        <a href="#migration">迁移</a>
+        <a href="#api">API</a>
+        <a href="#docker">Docker 验证</a>
+        <a class="nav-action" href="https://github.com/neko233-com/Sentinel233">GitHub</a>
+      </nav>
+    </div>
+  </header>
+
+  <div class="hero" id="top">
+    <canvas id="hero-canvas" aria-hidden="true"></canvas>
+    <div class="hero-content">
+      <div class="eyebrow">Grafana replacement, Prometheus native</div>
+      <h1>Sentinel233</h1>
+      <p class="hero-copy">一套服务承接采集、存储、PromQL、Dashboard、告警、生态格式导入与 Docker 验证，让 Grafana + Prometheus 组件链路收束到一个可运维控制面。</p>
+      <div class="hero-actions">
+        <a class="button primary" href="#docker">运行全链路验证</a>
+        <a class="button" href="#migration">查看迁移路径</a>
+        <a class="button" href="#api">打开 API 索引</a>
+      </div>
+      <div class="hero-proof">
+        <div class="proof-item"><strong>/api/v1/*</strong><span>Prometheus HTTP API</span></div>
+        <div class="proof-item"><strong>remote_write</strong><span>Snappy protobuf ingestion</span></div>
+        <div class="proof-item"><strong>Grafana JSON</strong><span>Dashboard import/export</span></div>
+        <div class="proof-item"><strong>Docker E2E</strong><span>Replacement chain verified</span></div>
+      </div>
+    </div>
+  </div>
+
+  <main>
+    <section id="matrix" class="reveal">
+      <div class="section-head">
+        <h2>替代能力矩阵</h2>
+        <p>这些能力不是文档承诺，而是由 API、Docker 脚本和 CI 流水线持续验证的运行契约。</p>
+      </div>
+      <div class="matrix">
+        <div class="matrix-row"><strong>Prometheus 查询层</strong><p>支持 query、query_range、series、labels、metadata、targets、rules、alerts、status/tsdb 等 Grafana 常用探测端点。</p><span class="status">Ready</span></div>
+        <div class="matrix-row"><strong>写入与采集层</strong><p>兼容 Prometheus remote_write、OpenMetrics scrape、Sentinel native JSON ingestion。</p><span class="status">Ready</span></div>
+        <div class="matrix-row"><strong>Grafana Dashboard</strong><p>导入 panels、targets、gridPos、fieldConfig、templating、datasource；导出保留多 target。</p><span class="status">Ready</span></div>
+        <div class="matrix-row"><strong>Grafana datasource provisioning</strong><p>导入 datasource YAML/JSON，Prometheus datasource 自动映射到 Sentinel `/api/v1`。</p><span class="status">Ready</span></div>
+        <div class="matrix-row"><strong>Prometheus 配置</strong><p>`scrape_configs.static_configs` 落成 Sentinel targets；rule file 的 alert rules 落成 Sentinel alert rules。</p><span class="status">Ready</span></div>
+        <div class="matrix-row"><strong>Alertmanager 迁移窗口</strong><p>提供 webhook receiver，用于迁移期联调通知 payload 与接收链路。</p><span class="status">Ready</span></div>
+      </div>
+    </section>
+
+    <section id="migration" class="reveal">
+      <div class="section-head">
+        <h2>迁移路径</h2>
+        <p>先并行，后接管。保持 exporter 和 agent 不动，把控制面、面板和规则逐步迁入 Sentinel233。</p>
+      </div>
+      <div class="flow">
+        <div class="flow-step"><span>01</span><h3>接入数据</h3><p>将 Prometheus Agent、Grafana Agent 或 Alloy 的 remote_write 指向 Sentinel233。</p></div>
+        <div class="flow-step"><span>02</span><h3>导入配置</h3><p>通过 compat importer 导入 Prometheus scrape config、rules 和 Grafana datasource。</p></div>
+        <div class="flow-step"><span>03</span><h3>迁移面板</h3><p>导入 Grafana dashboard JSON，保留变量、多 target、layout 与 fieldConfig。</p></div>
+        <div class="flow-step"><span>04</span><h3>下线 Grafana</h3><p>通过 Docker E2E 和 CI 验证后，把查询入口与告警入口切到 Sentinel233。</p></div>
+      </div>
+    </section>
+
+    <section id="commands" class="reveal">
+      <div class="section-head">
+        <h2>迁移命令</h2>
+        <p>以下命令就是 Docker E2E 中覆盖的同一组入口，可直接用于灰度环境 rehearsal。</p>
+      </div>
+      <div class="terminal">
+        <div class="terminal-bar"><span>sentinel233 replacement rehearsal</span><button class="copy" data-copy="commands-code">Copy</button></div>
+        <pre id="commands-code">docker compose up -d --build
+
+curl -X POST http://127.0.0.1:23390/api/v1/write \
+  -H "Content-Encoding: snappy" \
+  -H "Content-Type: application/x-protobuf" \
+  --data-binary @prometheus-write-request.snappy
+
+curl -X POST "http://127.0.0.1:23390/api/compat/import?source=prometheus-config" \
+  -H "Authorization: Bearer &lt;token&gt;" \
+  -H "Content-Type: application/yaml" \
+  --data-binary @prometheus.yml
+
+curl -X POST "http://127.0.0.1:23390/api/compat/import?source=prometheus-rules" \
+  -H "Authorization: Bearer &lt;token&gt;" \
+  -H "Content-Type: application/yaml" \
+  --data-binary @rules.yml
+
+curl -X POST http://127.0.0.1:23390/api/dashboards/import \
+  -H "Authorization: Bearer &lt;token&gt;" \
+  -H "Content-Type: application/json" \
+  --data-binary @grafana-dashboard.json
+
+pwsh ./scripts/docker-grafana-replacement-e2e.ps1</pre>
+      </div>
+    </section>
+
+    <section id="api" class="reveal">
+      <div class="section-head">
+        <h2>API 索引</h2>
+        <p>Grafana、Prometheus、agent、脚本和 CI 都走这些稳定入口，避免多套配置模型互相漂移。</p>
+      </div>
+      <div class="api-grid">
+        <div class="api-row"><span class="method">GET/POST</span><div><code>/api/v1/query</code><span>Prometheus instant query</span></div></div>
+        <div class="api-row"><span class="method">GET/POST</span><div><code>/api/v1/query_range</code><span>Prometheus matrix query</span></div></div>
+        <div class="api-row"><span class="method">POST</span><div><code>/api/v1/write</code><span>Remote write snappy protobuf</span></div></div>
+        <div class="api-row"><span class="method">GET/POST</span><div><code>/api/v1/series</code><span>Series metadata with match[]</span></div></div>
+        <div class="api-row"><span class="method">GET/POST</span><div><code>/api/v1/labels</code><span>Label names for Grafana variables</span></div></div>
+        <div class="api-row"><span class="method">GET</span><div><code>/api/v1/metadata</code><span>Metric metadata</span></div></div>
+        <div class="api-row"><span class="method">POST</span><div><code>/api/compat/import</code><span>Grafana/Prometheus ecosystem import</span></div></div>
+        <div class="api-row"><span class="method">POST</span><div><code>/api/dashboards/import</code><span>Grafana dashboard JSON import</span></div></div>
+        <div class="api-row"><span class="method">GET</span><div><code>/api/dashboards/{id}/export</code><span>Grafana-compatible dashboard export</span></div></div>
+        <div class="api-row"><span class="method">POST</span><div><code>/api/compat/alertmanager/webhook</code><span>Alertmanager migration receiver</span></div></div>
+      </div>
+    </section>
+
+    <section id="docker" class="reveal">
+      <div class="split">
+        <div>
+          <div class="section-head" style="display:block;margin-bottom:24px">
+            <h2>Docker 全链路验证</h2>
+            <p style="margin-top:18px">脚本会构建镜像、启动 Compose、登录、导入生态格式、写入 remote_write 样本、查询 PromQL、导入并导出 Grafana dashboard、接收 Alertmanager webhook。</p>
+          </div>
+          <div class="checklist">
+            <div class="check"><b>1</b><span>Docker BuildKit cache 加速模块下载与 Go build。</span></div>
+            <div class="check"><b>2</b><span>Compose 使用 project name 隔离，支持 CI 与本地反复执行。</span></div>
+            <div class="check"><b>3</b><span>脚本失败即停，输出具体失败步骤。</span></div>
+            <div class="check"><b>4</b><span>CI 可直接调用同一脚本，避免“本地可以、流水线不行”。</span></div>
+          </div>
+        </div>
+        <div class="release">
+          <h3>One command proof</h3>
+          <p>用 Docker 跑完替代链路，再把同一验证放进 GitHub Actions。</p>
+          <a class="button primary" href="#commands">查看命令</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <span>Sentinel233 Docs · HTML driven GitHub Pages</span>
+    <span>Prometheus compatible · Grafana replacement · Docker verified</span>
+  </footer>
+
+  <script>
+    const canvas = document.getElementById('hero-canvas');
+    const ctx = canvas.getContext('2d');
+    let width = 0;
+    let height = 0;
+    let points = [];
+
+    function resize() {
+      const ratio = Math.min(window.devicePixelRatio || 1, 2);
+      width = canvas.clientWidth;
+      height = canvas.clientHeight;
+      canvas.width = width * ratio;
+      canvas.height = height * ratio;
+      ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+      points = Array.from({ length: Math.floor(width / 28) }, (_, i) => ({
+        x: i * 28,
+        y: Math.random() * height,
+        speed: .35 + Math.random() * .9,
+        phase: Math.random() * Math.PI * 2
+      }));
+    }
+
+    function draw(t) {
+      ctx.clearRect(0, 0, width, height);
+      const grid = 46;
+      ctx.strokeStyle = 'rgba(255,255,255,.055)';
+      ctx.lineWidth = 1;
+      for (let x = 0; x < width; x += grid) {
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, height);
+        ctx.stroke();
+      }
+      for (let y = 0; y < height; y += grid) {
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(width, y);
+        ctx.stroke();
+      }
+
+      points.forEach((p, i) => {
+        p.y += p.speed;
+        if (p.y > height + 40) p.y = -40;
+        const amp = Math.sin(t / 700 + p.phase) * 22;
+        const x = p.x + amp;
+        const alpha = .18 + (Math.sin(t / 500 + i) + 1) * .12;
+        ctx.fillStyle = `rgba(62,230,168,${alpha})`;
+        ctx.beginPath();
+        ctx.arc(x, p.y, 2.2, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = `rgba(85,199,255,${alpha * .32})`;
+        ctx.beginPath();
+        ctx.moveTo(x, p.y);
+        ctx.lineTo(width - x * .22, p.y + Math.sin(t / 900 + i) * 80);
+        ctx.stroke();
+      });
+      requestAnimationFrame(draw);
+    }
+
+    window.addEventListener('resize', resize);
+    resize();
+    requestAnimationFrame(draw);
+
+    const progress = document.getElementById('progress');
+    const navLinks = [...document.querySelectorAll('nav a[href^="#"]')];
+    const sections = [...document.querySelectorAll('section[id]')];
+    function onScroll() {
+      const max = document.documentElement.scrollHeight - window.innerHeight;
+      progress.style.width = `${Math.max(0, Math.min(1, window.scrollY / max)) * 100}%`;
+      let active = '';
+      sections.forEach(section => {
+        if (section.getBoundingClientRect().top < window.innerHeight * .45) active = section.id;
+      });
+      navLinks.forEach(link => link.classList.toggle('active', link.getAttribute('href') === `#${active}`));
+    }
+    window.addEventListener('scroll', onScroll, { passive: true });
+    onScroll();
+
+    const observer = new IntersectionObserver(entries => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) entry.target.classList.add('visible');
+      });
+    }, { threshold: .14 });
+    document.querySelectorAll('.reveal').forEach(el => observer.observe(el));
+
+    document.querySelectorAll('[data-copy]').forEach(button => {
+      button.addEventListener('click', async () => {
+        const target = document.getElementById(button.dataset.copy);
+        await navigator.clipboard.writeText(target.innerText);
+        button.textContent = 'Copied';
+        setTimeout(() => button.textContent = 'Copy', 1200);
+      });
+    });
+  </script>
+</body>
+</html>

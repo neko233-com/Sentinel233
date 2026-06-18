@@ -2,7 +2,6 @@ services:
   sentinel233-server:
     build: .
     image: sentinel233-server:latest
-    container_name: sentinel233-server
     ports:
       - "23390:23390"
       - "23391:23391"

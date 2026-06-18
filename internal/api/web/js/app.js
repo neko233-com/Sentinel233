@@ -441,11 +441,15 @@ function applyGrafanaTemplate(expr, variables = {}, context = {}) {
 function normalizeSeries(data) {
   const raw = data?.data?.result || [];
   const series = [];
+  if (data?.data?.resultType === 'scalar' && Array.isArray(raw) && raw.length >= 2) {
+    return [{ label: 'scalar', metric: {}, values: [[Number(raw[0]), Number(raw[1])]] }];
+  }
   raw.forEach((item, index) => {
     if (item?.values || item?.value) {
       const values = item.values || [item.value];
       series.push({
         label: labelsToString(item.metric || {}, index),
+        metric: item.metric || {},
         values: values.map(v => [Number(v[0]), Number(v[1])]),
       });
       return;
@@ -457,6 +461,7 @@ function normalizeSeries(data) {
           const value = Array.isArray(row[1]) ? row[1] : [];
           series.push({
             label: labelsToString(metric, rowIndex),
+            metric,
             values: [[Number(value[0]), Number(value[1])]],
           });
         }
@@ -594,16 +599,24 @@ function runPanelSQLTransform(sql, rows) {
 async function fetchPanelDataset(panel, start, end, step) {
   const sourceQuery = panelSourceQuery(panel);
   if (!sourceQuery) throw new Error((panel.queryType || 'promql') === 'sql' ? 'SQL 面板需要先填写源 PromQL 查询' : '此面板没有查询语句');
-  const raw = await queryPromQL(sourceQuery, start, end, step);
   if ((panel.queryType || 'promql') !== 'sql') {
-    const series = normalizeSeries(raw);
+    const targets = panelPromQLTargets(panel);
+    const responses = await Promise.all(targets.map(target => queryPromQL(target.query, start, end, step)));
+    const series = responses.flatMap((raw, index) => {
+      const target = targets[index];
+      return normalizeSeries(raw).map(item => ({
+        ...item,
+        label: formatGrafanaLegend(target.legend, item.metric, item.label),
+      }));
+    });
     return {
       mode: 'promql',
-      raw,
+      raw: responses[0],
       rows: latestRowsFromSeries(series),
       series,
     };
   }
+  const raw = await queryPromQL(sourceQuery, start, end, step);
   const sqlRows = runPanelSQLTransform(panel.query, promSeriesRows(raw));
   return {
     mode: 'sql',
@@ -611,6 +624,26 @@ async function fetchPanelDataset(panel, start, end, step) {
     rows: sqlRows,
     series: rowsToSeries(sqlRows),
   };
+}
+
+function panelPromQLTargets(panel) {
+  const rawTargets = Array.isArray(panel.grafana?.targets) ? panel.grafana.targets : [];
+  const targets = rawTargets
+    .filter(target => !target.hide)
+    .map((target, index) => ({
+      refId: target.refId || String.fromCharCode(65 + index),
+      query: target.expr || target.query || '',
+      legend: target.legendFormat || target.alias || panel.legend || '',
+    }))
+    .filter(target => target.query);
+  if (targets.length) return targets;
+  return [{ refId: 'A', query: panelSourceQuery(panel), legend: panel.legend || '' }];
+}
+
+function formatGrafanaLegend(template, metric = {}, fallback = '') {
+  const text = String(template || '').trim();
+  if (!text) return fallback;
+  return text.replace(/\{\{\s*([^}\s]+)\s*\}\}/g, (_, key) => metric?.[key] ?? '');
 }
 
 function mergeDeep(base, extra) {
@@ -877,7 +910,7 @@ function analyzeGrafanaDashboard(dashboard) {
     if (!grafanaTypeMap[panel.type] && !['timeseries', 'stat', 'gauge', 'table', 'bar', 'pie', 'scatter', 'heatmap'].includes(mappedType)) {
       warnings.push(`面板类型 ${panel.type || 'unknown'} 需要人工确认`);
     }
-    if ((panel.targets || []).length > 1) warnings.push('存在多个 targets，当前默认只直接渲染首个 target');
+    if ((panel.targets || []).length > 1) warnings.push('存在多个 targets，会保留并并行渲染 PromQL targets');
     if ((panel.transformations || []).length > 0) warnings.push('存在 transformations，当前保留原配置但不会逐条复刻 Grafana 行为');
     if (panel.datasource && typeof panel.datasource === 'object') warnings.push('datasource 为复杂对象，建议导入后复核变量与数据源映射');
     if (warnings.length === 0) report.fullySupported += 1;
@@ -984,7 +1017,7 @@ async function renderOverview() {
     api('/api/v1/status/buildinfo').catch(() => ({ data: {} })),
   ]);
   const stats = statsResp.data || {};
-  const targets = targetsResp.data || [];
+  const targets = normalizeTargetsResponse(targetsResp.data);
   const healthyTargets = targets.filter(x => x.healthy).length;
 
   container.innerHTML = `
@@ -1034,6 +1067,17 @@ async function renderOverview() {
 
   loadConfigSummary();
   drawOverviewCharts();
+}
+
+function normalizeTargetsResponse(data) {
+  if (Array.isArray(data)) return data;
+  const targets = data?.activeTargets || [];
+  return targets.map(target => ({
+    ...target,
+    healthy: target.healthy ?? target.health === 'up',
+    endpoint: target.endpoint || target.scrapeUrl,
+    labels: target.labels || target.discoveredLabels || {},
+  }));
 }
 
 function metricCard(label, value, note, status = '') {
@@ -1155,6 +1199,7 @@ async function renderDashboards() {
           <div><h2>预设仪表盘</h2><p>先从可用模板开始，也可以直接导入 Grafana JSON。</p></div>
           <div>
             <button class="btn btn-secondary" onclick="importGrafanaDialog()">导入 Grafana JSON</button>
+            <button class="btn btn-secondary" onclick="importCompatDialog()">导入生态配置</button>
             <button class="btn btn-primary" onclick="createDashboardDialog()">新建空白盘</button>
           </div>
         </div>
@@ -1242,20 +1287,57 @@ async function importGrafanaDashboard() {
   if (!requireWriteSession()) return;
   try {
     const raw = JSON.parse(document.getElementById('grafana-json').value);
-    const converted = convertGrafanaDashboard(raw.dashboard || raw);
-    await api('/api/dashboards', {
+    const resp = await api('/api/dashboards/import', {
       method: 'POST',
-      body: JSON.stringify({
-        title: converted.title,
-        description: converted.description,
-        panels: JSON.stringify(converted.panels),
-        layout: JSON.stringify(converted.layout),
-        variables: JSON.stringify(converted.variables),
-        tags: JSON.stringify(converted.tags),
-      }),
+      body: JSON.stringify(raw),
     });
     closeModal();
-    toast(`已导入 ${converted.panels.length} 个 Grafana 面板，兼容告警 ${converted.layout.compatibility?.totalWarnings || 0} 项`);
+    const dash = resp.data || {};
+    const panels = safeParseJSON(dash.panels, []);
+    const layout = safeParseJSON(dash.layout, {});
+    toast(`已导入 ${panels.length} 个 Grafana 面板，兼容告警 ${layout.compatibility?.totalWarnings || 0} 项`);
+    renderDashboards();
+  } catch (e) {
+    toast(`导入失败：${e.message}`);
+  }
+}
+
+function importCompatDialog() {
+  showModal('导入 Grafana / Prometheus 生态配置', `
+    <div class="form-grid">
+      <div class="form-group"><label>格式</label><select id="compat-format">
+        <option value="prometheus-config">Prometheus scrape config</option>
+        <option value="prometheus-rules">Prometheus rule file</option>
+        <option value="grafana-datasources">Grafana datasource provisioning</option>
+        <option value="alertmanager-webhook">Alertmanager webhook payload</option>
+        <option value="sentinel-dashboard">Sentinel dashboard JSON</option>
+      </select></div>
+      <div class="form-group"><label>内容类型</label><select id="compat-content-type">
+        <option value="application/yaml">YAML</option>
+        <option value="application/json">JSON</option>
+      </select></div>
+    </div>
+    <div class="form-group"><label>配置内容</label><textarea id="compat-content" class="json-editor code" placeholder="scrape_configs:\n  - job_name: node\n    static_configs:\n      - targets: ['localhost:9100']"></textarea></div>
+    <p class="hint">Prometheus scrape/rule、Grafana datasource provisioning 和 Alertmanager webhook 会转换成 Sentinel233 的 target、rule 或兼容元数据。</p>
+    <button class="btn btn-primary" onclick="importCompatibilityConfig()">导入配置</button>
+  `);
+}
+
+async function importCompatibilityConfig() {
+  if (!requireWriteSession()) return;
+  const format = document.getElementById('compat-format').value;
+  const contentType = document.getElementById('compat-content-type').value;
+  const content = document.getElementById('compat-content').value;
+  try {
+    const resp = await api(`/api/compat/import?source=${encodeURIComponent(format)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': contentType },
+      body: content,
+    });
+    closeModal();
+    const data = resp.data || {};
+    const count = data.importedTargets?.length || data.importedAlertRules?.length || data.datasources?.length || data.acceptedAlerts || (data.dashboard ? 1 : 0);
+    toast(`生态配置已导入：${format}，落地对象 ${count} 个`);
     renderDashboards();
   } catch (e) {
     toast(`导入失败：${e.message}`);
@@ -1315,9 +1397,12 @@ function flattenGrafanaPanels(panels) {
 }
 
 async function exportGrafanaDashboard(id) {
-  const resp = await api(`/api/dashboards/${id}`);
-  const dash = resp.data;
-  const exported = convertToGrafanaDashboard(dash);
+  const [dashResp, exportResp] = await Promise.all([
+    api(`/api/dashboards/${id}`),
+    api(`/api/dashboards/${id}/export`),
+  ]);
+  const dash = dashResp.data;
+  const exported = exportResp.data;
   const blob = new Blob([JSON.stringify(exported, null, 2)], { type: 'application/json' });
   const link = document.createElement('a');
   link.href = URL.createObjectURL(blob);
@@ -1650,7 +1735,7 @@ async function renderAlerts() {
     api('/api/alerts/history').catch(() => ({ data: [] })),
     api('/api/alert-rules').catch(() => ({ data: [] })),
   ]);
-  const active = activeResp.data || [];
+  const active = normalizeAlertsResponse(activeResp.data);
   const history = historyResp.data || [];
   const rules = rulesResp.data || [];
   document.getElementById('page-content').innerHTML = `
@@ -1667,6 +1752,11 @@ async function renderAlerts() {
       </section>
     </div>
   `;
+}
+
+function normalizeAlertsResponse(data) {
+  if (Array.isArray(data)) return data;
+  return data?.alerts || [];
 }
 
 async function renderTargets() {
@@ -2007,6 +2097,8 @@ window.createDashboard = createDashboard;
 window.createDashboardFromPreset = createDashboardFromPreset;
 window.importGrafanaDialog = importGrafanaDialog;
 window.importGrafanaDashboard = importGrafanaDashboard;
+window.importCompatDialog = importCompatDialog;
+window.importCompatibilityConfig = importCompatibilityConfig;
 window.exportGrafanaDashboard = exportGrafanaDashboard;
 window.deleteDashboard = deleteDashboard;
 window.openDashboard = openDashboard;

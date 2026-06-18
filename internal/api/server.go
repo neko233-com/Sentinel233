@@ -7,12 +7,12 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"net"
 	"net/http"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
-	"net"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -84,13 +84,24 @@ func (s *Server) Router() chi.Router {
 
 	// Prometheus-compatible API (public read for compatibility)
 	r.Get("/api/v1/query", s.handleQuery)
+	r.Post("/api/v1/query", s.handleQuery)
 	r.Get("/api/v1/query_range", s.handleQueryRange)
+	r.Post("/api/v1/query_range", s.handleQueryRange)
 	r.Get("/api/v1/series", s.handleSeries)
+	r.Post("/api/v1/series", s.handleSeries)
+	r.Get("/api/v1/labels", s.handleLabels)
+	r.Post("/api/v1/labels", s.handleLabels)
 	r.Get("/api/v1/label/{name}/values", s.handleLabelValues)
+	r.Post("/api/v1/label/{name}/values", s.handleLabelValues)
 	r.Get("/api/v1/targets", s.handleTargets)
+	r.Get("/api/v1/targets/metadata", s.handleTargetsMetadata)
 	r.Get("/api/v1/rules", s.handleRules)
 	r.Get("/api/v1/alerts", s.handleAlerts)
+	r.Get("/api/v1/metadata", s.handleMetadata)
+	r.Get("/api/v1/status/tsdb", s.handleStatusTSDB)
 	r.Post("/api/v1/write", s.handleRemoteWrite)
+	r.Get("/api/v1/alertmanagers", s.handleAlertmanagers)
+	r.Get("/api/v1/query_exemplars", s.handleQueryExemplars)
 	r.Get("/api/v1/status/config", s.handleStatusConfig)
 	r.Get("/api/v1/status/runtime", s.handleStatusRuntime)
 
@@ -102,6 +113,8 @@ func (s *Server) Router() chi.Router {
 	r.Route("/api/local/v1", func(r chi.Router) {
 		r.Use(s.localAgentMiddleware)
 		r.Get("/capabilities", s.handleLocalAgentCapabilities)
+		r.Get("/compat/capabilities", s.handleCompatCapabilities)
+		r.Post("/compat/import", s.handleLocalAgentImportCompatibility)
 		r.Get("/dashboards", s.handleListDashboards)
 		r.Post("/dashboards", s.handleLocalAgentCreateDashboard)
 		r.Post("/dashboards/import", s.handleLocalAgentImportDashboard)
@@ -129,6 +142,15 @@ func (s *Server) Router() chi.Router {
 		r.Get("/{id}/export", s.requireRole("viewer", s.handleExportDashboard))
 		r.Put("/{id}", s.requireRole("operator", s.handleUpdateDashboard))
 		r.Delete("/{id}", s.requireRole("admin", s.handleDeleteDashboard))
+	})
+
+	r.Post("/api/compat/alertmanager/webhook", s.handleAlertmanagerWebhookReceiver)
+
+	// Compatibility import API for Grafana/Prometheus ecosystem files.
+	r.Route("/api/compat", func(r chi.Router) {
+		r.Use(s.tenantMiddleware)
+		r.Get("/capabilities", s.requireRole("viewer", s.handleCompatCapabilities))
+		r.Post("/import", s.requireRole("operator", s.handleImportCompatibility))
 	})
 
 	// Targets API (tenant-scoped)
@@ -626,12 +648,7 @@ func (s *Server) handleDeleteDashboard(w http.ResponseWriter, r *http.Request) {
 	s.jsonOK(w, map[string]interface{}{"status": "success"})
 }
 
-type grafanaImportTarget struct {
-	Expr         string `json:"expr"`
-	Query        string `json:"query"`
-	LegendFormat string `json:"legendFormat"`
-	Alias        string `json:"alias"`
-}
+type grafanaImportTarget map[string]interface{}
 
 type grafanaImportVariable struct {
 	Name       string      `json:"name"`
@@ -751,6 +768,10 @@ func convertGrafanaPayloadToDashboard(payload map[string]json.RawMessage) (*stor
 		panelType := mapGrafanaPanelType(panel.Type)
 		unit := ""
 		panelID := coerceInt(panel.ID, idx+1)
+		datasource := cloneObject(panel.Datasource)
+		if datasource == nil && target != nil {
+			datasource = cloneObject((*target)["datasource"])
+		}
 		thresholds := interface{}([]interface{}{})
 		if panel.FieldConfig != nil {
 			if defaults, ok := panel.FieldConfig["defaults"].(map[string]interface{}); ok {
@@ -766,17 +787,11 @@ func convertGrafanaPayloadToDashboard(payload map[string]json.RawMessage) (*stor
 		}
 		legend := panel.Legend
 		if legend == "" && target != nil {
-			legend = target.LegendFormat
-			if legend == "" {
-				legend = target.Alias
-			}
+			legend = grafanaTargetString(target, "legendFormat", "alias")
 		}
 		query := ""
 		if target != nil {
-			query = target.Expr
-			if query == "" {
-				query = target.Query
-			}
+			query = grafanaTargetString(target, "expr", "query")
 		}
 		convertedPanels = append(convertedPanels, map[string]interface{}{
 			"id":          panelID,
@@ -785,7 +800,7 @@ func convertGrafanaPayloadToDashboard(payload map[string]json.RawMessage) (*stor
 			"queryType":   "promql",
 			"query":       query,
 			"sourceQuery": query,
-			"datasource":  panel.Datasource,
+			"datasource":  datasource,
 			"legend":      legend,
 			"unit":        unit,
 			"thresholds":  thresholds,
@@ -1003,7 +1018,7 @@ func buildGrafanaPanelCompatibility(panel grafanaImportPanel, index int) grafana
 		}
 	}
 	if len(panel.Targets) > 1 {
-		item.Warnings = append(item.Warnings, "multiple targets detected; runtime currently renders the first target directly")
+		item.Warnings = append(item.Warnings, "multiple targets detected; Sentinel preserves all targets and renders PromQL targets best-effort")
 	}
 	if len(panel.Transformations) > 0 {
 		item.Warnings = append(item.Warnings, "grafana transformations are preserved as metadata and may need manual recreation")
@@ -1020,12 +1035,12 @@ func (r grafanaCompatibilityReport) toMap() map[string]interface{} {
 		panels = append(panels, panel.toMap())
 	}
 	return map[string]interface{}{
-		"totalPanels":       r.TotalPanels,
-		"fullySupported":    r.FullySupported,
+		"totalPanels":        r.TotalPanels,
+		"fullySupported":     r.FullySupported,
 		"partiallySupported": r.PartiallySupport,
-		"unsupported":       r.Unsupported,
-		"totalWarnings":     r.TotalWarnings,
-		"panels":            panels,
+		"unsupported":        r.Unsupported,
+		"totalWarnings":      r.TotalWarnings,
+		"panels":             panels,
 	}
 }
 
@@ -1183,8 +1198,14 @@ func cloneObject(value interface{}) interface{} {
 }
 
 func cloneTargets(targets []grafanaImportTarget) []grafanaImportTarget {
-	cloned := make([]grafanaImportTarget, len(targets))
-	copy(cloned, targets)
+	cloned := make([]grafanaImportTarget, 0, len(targets))
+	for _, target := range targets {
+		clone := grafanaImportTarget{}
+		for key, value := range target {
+			clone[key] = cloneObject(value)
+		}
+		cloned = append(cloned, clone)
+	}
 	return cloned
 }
 
@@ -1193,6 +1214,18 @@ func firstGrafanaTarget(targets []grafanaImportTarget) *grafanaImportTarget {
 		return nil
 	}
 	return &targets[0]
+}
+
+func grafanaTargetString(target *grafanaImportTarget, keys ...string) string {
+	if target == nil {
+		return ""
+	}
+	for _, key := range keys {
+		if value := strings.TrimSpace(getString((*target)[key])); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func panelTitle(title, fallback string) string {
@@ -1713,13 +1746,13 @@ func validateRuntimeConfig(cfg *config.Config) error {
 // ============ Prometheus handlers ============
 
 func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
-	expr := r.URL.Query().Get("query")
+	expr := requestParam(r, "query")
 	if expr == "" {
 		s.jsonError(w, "query parameter required", http.StatusBadRequest)
 		return
 	}
 	ts := time.Now()
-	if t := r.URL.Query().Get("time"); t != "" {
+	if t := requestParam(r, "time"); t != "" {
 		if parsed, err := strconv.ParseFloat(t, 64); err == nil {
 			ts = time.Unix(int64(parsed), 0)
 		}
@@ -1739,14 +1772,14 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleQueryRange(w http.ResponseWriter, r *http.Request) {
-	expr := r.URL.Query().Get("query")
+	expr := requestParam(r, "query")
 	if expr == "" {
 		s.jsonError(w, "query parameter required", http.StatusBadRequest)
 		return
 	}
-	startStr := r.URL.Query().Get("start")
-	endStr := r.URL.Query().Get("end")
-	stepStr := r.URL.Query().Get("step")
+	startStr := requestParam(r, "start")
+	endStr := requestParam(r, "end")
+	stepStr := requestParam(r, "step")
 	start, err := strconv.ParseFloat(startStr, 64)
 	if err != nil {
 		s.jsonError(w, "invalid start", http.StatusBadRequest)
@@ -1766,18 +1799,14 @@ func (s *Server) handleQueryRange(w http.ResponseWriter, r *http.Request) {
 		s.jsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	var resultData []interface{}
-	for _, res := range results {
-		resultData = append(resultData, formatResult(res))
-	}
 	s.jsonOK(w, map[string]interface{}{
 		"status": "success",
-		"data":   map[string]interface{}{"resultType": "matrix", "result": resultData},
+		"data":   map[string]interface{}{"resultType": "matrix", "result": formatRangeResults(results)},
 	})
 }
 
 func (s *Server) handleSeries(w http.ResponseWriter, r *http.Request) {
-	series := s.db.AllSeries()
+	series := s.filteredSeries(r)
 	var result []interface{}
 	for _, ser := range series {
 		lbls := make(map[string]string)
@@ -1791,7 +1820,7 @@ func (s *Server) handleSeries(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleLabelValues(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
-	series := s.db.AllSeries()
+	series := s.filteredSeries(r)
 	seen := make(map[string]bool)
 	var values []string
 	for _, ser := range series {
@@ -1805,22 +1834,34 @@ func (s *Server) handleLabelValues(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleTargets(w http.ResponseWriter, r *http.Request) {
+	if s.scrape == nil {
+		s.jsonOK(w, map[string]interface{}{"status": "success", "data": map[string]interface{}{"activeTargets": []interface{}{}, "droppedTargets": []interface{}{}}})
+		return
+	}
 	targets := s.scrape.GetTargets()
 	var result []map[string]interface{}
 	for _, t := range targets {
 		result = append(result, map[string]interface{}{
 			"name": t.Name, "endpoint": t.Endpoint, "labels": t.Labels,
-			"healthy": t.Healthy, "lastScrape": t.LastScrape, "lastError": "",
+			"healthy": t.Healthy, "lastScrape": t.LastScrape, "lastError": errorString(t.LastError),
+			"discoveredLabels": t.Labels,
+			"scrapeUrl":        t.Endpoint,
+			"health":           prometheusHealth(t.Healthy),
 		})
 	}
-	s.jsonOK(w, map[string]interface{}{"status": "success", "data": result})
+	s.jsonOK(w, map[string]interface{}{"status": "success", "data": map[string]interface{}{"activeTargets": result, "droppedTargets": []interface{}{}}})
 }
 
 func (s *Server) handleRules(w http.ResponseWriter, r *http.Request) {
-	s.jsonOK(w, map[string]interface{}{"status": "success", "data": map[string]interface{}{"groups": []interface{}{}}})
+	rules := s.prometheusRuleGroups(s.getTenantID(r))
+	s.jsonOK(w, map[string]interface{}{"status": "success", "data": map[string]interface{}{"groups": rules}})
 }
 
 func (s *Server) handleAlerts(w http.ResponseWriter, r *http.Request) {
+	if s.alertMgr == nil {
+		s.jsonOK(w, map[string]interface{}{"status": "success", "data": map[string]interface{}{"alerts": []interface{}{}}})
+		return
+	}
 	alerts := s.alertMgr.GetAlerts()
 	var result []map[string]interface{}
 	for _, a := range alerts {
@@ -1829,7 +1870,7 @@ func (s *Server) handleAlerts(w http.ResponseWriter, r *http.Request) {
 			"activeAt": a.ActiveAt, "annotations": a.Annotations,
 		})
 	}
-	s.jsonOK(w, map[string]interface{}{"status": "success", "data": result})
+	s.jsonOK(w, map[string]interface{}{"status": "success", "data": map[string]interface{}{"alerts": result}})
 }
 
 func (s *Server) handleGetAlerts(w http.ResponseWriter, r *http.Request) { s.handleAlerts(w, r) }
@@ -2072,7 +2113,7 @@ func resultTypeStr(t promql.ValueType) string {
 
 func formatResult(r promql.Result) interface{} {
 	if r.Type == promql.ValueScalar {
-		return []interface{}{[]interface{}{float64(time.Now().Unix()), fmt.Sprintf("%f", r.Scalar)}}
+		return []interface{}{float64(time.Now().Unix()), strconv.FormatFloat(r.Scalar, 'f', -1, 64)}
 	}
 	var result []interface{}
 	for _, s := range r.Vector {
@@ -2081,8 +2122,8 @@ func formatResult(r promql.Result) interface{} {
 			metric[l.Name] = l.Value
 		}
 		valStr := strconv.FormatFloat(s.Point.Value, 'f', -1, 64)
-		tsStr := strconv.FormatInt(s.Point.Timestamp/1000, 10)
-		result = append(result, []interface{}{metric, []interface{}{tsStr, valStr}})
+		ts := float64(s.Point.Timestamp) / 1000
+		result = append(result, map[string]interface{}{"metric": metric, "value": []interface{}{ts, valStr}})
 	}
 	return result
 }

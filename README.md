@@ -11,12 +11,14 @@
 |------|------|
 | **自研 TSDB** | WAL 崩溃恢复 + 内存存储 + 自动数据保留清理 |
 | **完整 PromQL** | 瞬时/范围向量、二元运算、聚合(sum/avg/min/max/count/stddev/topk...)、30+ 内置函数(rate/increase/delta/abs/ceil/floor/round/sqrt/log...)、标签匹配(=, !=, =~, !~) |
-| **Prometheus 兼容 API** | `/api/v1/query`、`/api/v1/query_range`、`/api/v1/series`、`/api/v1/label/{name}/values` |
+| **Prometheus 兼容 API** | `/api/v1/query`、`/api/v1/query_range`、`/api/v1/series`、`/api/v1/labels`、`/api/v1/metadata`、`/api/v1/targets` |
 | **Scrape 采集** | 拉模式采集 + OpenMetrics 解析 + 动态目标管理 |
 | **常用集成预设** | Go、JVM、MySQL、PostgreSQL、Redis、Nginx、Linux node_exporter、Docker/cAdvisor、Kubernetes、Blackbox |
 | **告警引擎** | 规则评估 + pending→firing 状态机 + Webhook 通知 |
 | **独立实现的可落地监控系统** | 一体化的采集、存储、查询、告警、面板与权限体系（无外部依赖）；UI 视觉上借鉴 Grafana 的操作便捷性，但实现链路与数据模型与其不同 |
 | **Dashboard 管理** | 创建/编辑/删除仪表盘、Grafana 导入导出、兼容性预检、动态添加面板 |
+| **生态格式导入** | `/api/compat/import` 可导入 Grafana dashboard/datasource provisioning、Prometheus scrape config/rule file、Alertmanager webhook payload |
+| **HTML 文档站** | `site/index.html` 独立驱动 GitHub Pages 文档，不依赖 Markdown 渲染 |
 | **可视化运行时** | Chart.js + ECharts 双渲染器，支持更贴近 Grafana 的图表效果 |
 | **数据变换** | 面板支持 `PromQL` 直出或 `PromQL + SQL` 变换，用于 ECharts 绘制与聚合透视 |
 | **i18n 国际化** | 中文 / English / 日本語，默认支持 3 语言 |
@@ -197,16 +199,23 @@ docker run -d -p 23390:23390 -p 23391:23391 -v sentinel233-data:/data sentinel23
 
 | 端点 | 方法 | 说明 |
 |------|------|------|
-| `/api/v1/query` | GET | 瞬时查询 |
-| `/api/v1/query_range` | GET | 范围查询 |
-| `/api/v1/series` | GET | 序列列表 |
-| `/api/v1/label/{name}/values` | GET | 标签值 |
-| `/api/v1/targets` | GET | 采集目标 |
+| `/api/v1/query` | GET/POST | 瞬时查询 |
+| `/api/v1/query_range` | GET/POST | 范围查询，返回 Prometheus matrix 结构 |
+| `/api/v1/series` | GET/POST | 序列列表，支持 `match[]` |
+| `/api/v1/labels` | GET/POST | 标签名列表，支持 `match[]` |
+| `/api/v1/label/{name}/values` | GET/POST | 标签值，支持 `match[]` |
+| `/api/v1/metadata` | GET | 指标元数据 |
+| `/api/v1/targets` | GET | Prometheus activeTargets/droppedTargets 结构 |
+| `/api/v1/targets/metadata` | GET | target 维度指标元数据 |
+| `/api/v1/rules` | GET | 告警规则组 |
 | `/api/v1/alerts` | GET | 活跃告警 |
+| `/api/v1/status/tsdb` | GET | TSDB label/series 统计 |
 | `/api/v1/status/config` | GET | 配置信息 |
 | `/api/v1/status/buildinfo` | GET | 构建信息 |
 | `/api/v1/status/runtime` | GET | 运行时信息 |
 | `/api/v1/write` | POST | Prometheus Remote Write，支持 snappy block 压缩 protobuf WriteRequest |
+| `/api/v1/alertmanagers` | GET | Alertmanager 发现兼容响应 |
+| `/api/v1/query_exemplars` | GET | Exemplars 兼容响应 |
 
 `/api/v1/write` 会保留 Prometheus 侧原始 labels 并写入内置 TSDB，适合把现有 Prometheus agent、Grafana Agent、Alloy 或其他 remote_write sender 指向 Sentinel233 Server。
 
@@ -229,6 +238,17 @@ docker run -d -p 23390:23390 -p 23391:23391 -v sentinel233-data:/data sentinel23
 | `/api/dashboards/{id}` | PUT | 更新 |
 | `/api/dashboards/{id}` | DELETE | 删除 |
 
+### 兼容生态导入 API
+
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/api/compat/capabilities` | GET | 查询支持的 Grafana/Prometheus 格式与通道 |
+| `/api/compat/import?source=prometheus-config` | POST | 导入 Prometheus `scrape_configs`，静态目标会落成 Sentinel scrape targets |
+| `/api/compat/import?source=prometheus-rules` | POST | 导入 Prometheus rule file，alert rules 会落成 Sentinel alert rules，recording rules 会保留为元数据 |
+| `/api/compat/import?source=grafana-datasources` | POST | 导入 Grafana datasource provisioning，保存 Prometheus datasource 映射 |
+| `/api/compat/import?source=grafana-dashboard` | POST | 导入 Grafana dashboard JSON |
+| `/api/compat/alertmanager/webhook` | POST | 接收 Alertmanager webhook payload 并保留最近一次 payload |
+
 ### Local Agent API
 
 仅允许本机 `127.0.0.1` / `::1` 访问，目的是让本地 agent、自动化脚本或 Codex 运行时直接操控 dashboard，不需要人工登录拿 token。
@@ -236,6 +256,8 @@ docker run -d -p 23390:23390 -p 23391:23391 -v sentinel233-data:/data sentinel23
 | 端点 | 方法 | 说明 |
 |------|------|------|
 | `/api/local/v1/capabilities` | GET | 返回本机 agent 能力描述 |
+| `/api/local/v1/compat/capabilities` | GET | 返回本机生态格式导入能力 |
+| `/api/local/v1/compat/import` | POST | loopback-only 导入 Grafana/Prometheus 生态配置 |
 | `/api/local/v1/dashboards` | GET | 列出 dashboard |
 | `/api/local/v1/dashboards` | POST | 直接创建 dashboard |
 | `/api/local/v1/dashboards/import` | POST | 直接导入 Grafana 或 Sentinel dashboard JSON |
@@ -323,6 +345,8 @@ make lint           # golangci-lint
 make smoke          # 构建 + 冒烟测试
 make docker-build   # Docker 构建
 make docker-run     # Docker 启动
+make docker-e2e     # Docker 全链路 Grafana 替代验证
+make docker-e2e-local # 使用本地 Go 二进制打包容器，适合 Docker Hub 暂不可用时验证
 ```
 
 ## 命令行参考
@@ -357,6 +381,7 @@ sentinel233-agent [flags]
 | [docs/grafana-replacement-guide.md](docs/grafana-replacement-guide.md) | 从 Grafana 迁移到 Sentinel233 的落地指南 |
 | [docs/github-release-guide.md](docs/github-release-guide.md) | 使用 `gh` 进行发布与文档发布流程 |
 | [docs/github-release-notes.md](docs/github-release-notes.md) | 本次发布说明与可直接发布的 release notes |
+| [site/index.html](site/index.html) | GitHub Pages HTML 文档站入口 |
 
 ## Grafana 迁移与 SQL/ECharts 面板
 
@@ -383,8 +408,9 @@ pwsh ./scripts/dashboard-migrate.ps1 `
 
 | 工作流 | 触发 | 说明 |
 |--------|------|------|
-| `ci.yml` | push/PR to main | 三平台测试 + vet + build + ShellCheck |
-| `release.yml` | tag `v*` | 多平台构建 + GitHub Release |
+| `ci.yml` | push/PR to main | 三平台测试 + vet + build + ShellCheck + Docker E2E |
+| `pages.yml` | push to main/site | 发布 `site/` HTML 文档站到 GitHub Pages |
+| `release.yml` | tag `v*` | 多平台矩阵构建 + GitHub Release |
 
 ## License
 

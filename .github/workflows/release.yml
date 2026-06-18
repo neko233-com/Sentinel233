@@ -4,6 +4,10 @@ on:
     tags: ['v*']
   workflow_dispatch:
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions:
   contents: write
 
@@ -11,8 +15,31 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  release:
+  verify:
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+          cache-dependency-path: go.sum
+      - run: go vet ./...
+      - run: go test ./... -count=1 -timeout=120s
+
+  build:
+    needs: verify
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - { goos: linux, goarch: amd64 }
+          - { goos: linux, goarch: arm64 }
+          - { goos: darwin, goarch: amd64 }
+          - { goos: darwin, goarch: arm64 }
+          - { goos: windows, goarch: amd64, ext: ".exe" }
+          - { goos: windows, goarch: arm64, ext: ".exe" }
     steps:
       - uses: actions/checkout@v4
         with:
@@ -20,43 +47,51 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.26'
+          cache: true
+          cache-dependency-path: go.sum
 
-      - name: Verify CI
-        run: |
-          go vet ./...
-          go test ./... -count=1 -timeout=120s
-
-      - name: Build release binaries
+      - name: Build target
+        env:
+          GOOS: ${{ matrix.target.goos }}
+          GOARCH: ${{ matrix.target.goarch }}
+          CGO_ENABLED: 0
+          EXT: ${{ matrix.target.ext }}
         run: |
           VERSION=${GITHUB_REF#refs/tags/}
+          if [ "$VERSION" = "$GITHUB_REF" ]; then VERSION="dev-${GITHUB_SHA::7}"; fi
           COMMIT=$(git rev-parse --short HEAD)
           DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
           LDFLAGS="-s -w -X github.com/neko233-com/Sentinel233/internal/version.Version=$VERSION -X github.com/neko233-com/Sentinel233/internal/version.Commit=$COMMIT -X github.com/neko233-com/Sentinel233/internal/version.Date=$DATE"
+          VERSION_NAME=${VERSION#v}
+          mkdir -p dist
+          go build -trimpath -ldflags="$LDFLAGS" -o "dist/sentinel233-server-${VERSION_NAME}-${GOOS}-${GOARCH}${EXT}" ./cmd/sentinel233-server
+          go build -trimpath -ldflags="$LDFLAGS" -o "dist/sentinel233-${VERSION_NAME}-${GOOS}-${GOARCH}${EXT}" ./cmd/sentinel233
+          go build -trimpath -ldflags="$LDFLAGS" -o "dist/sentinel233-agent-${VERSION_NAME}-${GOOS}-${GOARCH}${EXT}" ./cmd/sentinel233-agent
 
-          TARGETS="linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.target.goos }}-${{ matrix.target.goarch }}
+          path: dist/*
+          retention-days: 3
+          if-no-files-found: error
 
-          for target in $TARGETS; do
-            GOOS=${target%/*}
-            GOARCH=${target#*/}
-            EXT=""
-            if [ "$GOOS" = "windows" ]; then EXT=".exe"; fi
-
-            export CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH"
-            go build -ldflags="$LDFLAGS" -o "sentinel233-server-${VERSION#v}-${GOOS}-${GOARCH}${EXT}" ./cmd/sentinel233-server
-            go build -ldflags="$LDFLAGS" -o "sentinel233-${VERSION#v}-${GOOS}-${GOARCH}${EXT}" ./cmd/sentinel233
-            go build -ldflags="$LDFLAGS" -o "sentinel233-agent-${VERSION#v}-${GOOS}-${GOARCH}${EXT}" ./cmd/sentinel233-agent
-          done
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
 
       - name: Create checksums
         run: |
+          cd dist
           sha256sum sentinel233-server-* sentinel233-agent-* sentinel233-[0-9]*-* > sha256sums.txt
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
-          files: |
-            sentinel233-server-*
-            sentinel233-agent-*
-            sentinel233-[0-9]*-*
-            sha256sums.txt
+          files: dist/*

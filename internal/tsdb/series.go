@@ -2,6 +2,7 @@ package tsdb
 
 import (
 	"hash/fnv"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -110,10 +111,10 @@ type DB struct {
 	series map[uint64]*Series
 	mu     sync.RWMutex
 
-	retention  time.Duration
-	dataDir    string
-	wal        *WAL
-	stopCh     chan struct{}
+	retention time.Duration
+	dataDir   string
+	wal       *WAL
+	stopCh    chan struct{}
 }
 
 type DBConfig struct {
@@ -288,7 +289,8 @@ type Regexp struct {
 
 func (m RegexMatcher) Matches(labels Labels) bool {
 	v := labels.Get(m.Name)
-	return strings.Contains(v, m.Regex.Pattern)
+	matched, err := regexp.MatchString(m.Regex.Pattern, v)
+	return err == nil && matched
 }
 
 type NotRegexMatcher struct {
@@ -298,7 +300,8 @@ type NotRegexMatcher struct {
 
 func (m NotRegexMatcher) Matches(labels Labels) bool {
 	v := labels.Get(m.Name)
-	return !strings.Contains(v, m.Regex.Pattern)
+	matched, err := regexp.MatchString(m.Regex.Pattern, v)
+	return err != nil || !matched
 }
 
 type MultiMatcher struct {

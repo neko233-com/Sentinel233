@@ -1,0 +1,15 @@
+.git
+.github
+.codex
+bin
+data
+artifacts
+coverage.out
+*.db
+*.sqlite
+*.log
+tmp
+node_modules
+dist
+site/.cache
+libs/sentinel233-lib-go/bin

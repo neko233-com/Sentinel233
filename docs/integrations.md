@@ -32,6 +32,36 @@ remote_write:
   - url: http://sentinel233-server:23390/api/v1/write
 ```
 
+## Compatibility import API
+
+Migration and automation tools can import existing ecosystem files through:
+
+```text
+POST /api/compat/import?source=<format>
+```
+
+Supported formats:
+
+| Format | Result |
+|---|---|
+| `grafana-dashboard` | Creates a Sentinel dashboard and preserves Grafana target/layout/field metadata. |
+| `grafana-datasources` | Stores Grafana datasource provisioning metadata; Prometheus datasources map to Sentinel `/api/v1`. |
+| `prometheus-config` | Converts `scrape_configs[].static_configs` into Sentinel scrape targets and preserves remote_write/rule_files metadata. |
+| `prometheus-rules` | Converts alerting rules into Sentinel alert rules and preserves recording rules as metadata. |
+| `alertmanager-webhook` | Accepts an Alertmanager webhook payload for migration-window notification testing. |
+
+Loopback automation can use the same importer without a login token:
+
+```text
+POST /api/local/v1/compat/import?source=prometheus-config
+```
+
+Alertmanager-compatible webhook receiver:
+
+```text
+POST /api/compat/alertmanager/webhook
+```
+
 ### 迁移 Grafana 工作流（生产落地建议）
 
 在替代 Grafana 的生产场景中，建议按三层接入分离：
@@ -39,11 +69,13 @@ remote_write:
 - 第一层：统一抓取层（Scrape /remote_write）
   - 兼容现网 Prometheus Exporter（node_exporter、mysqld_exporter 等）
   - 兼容现有 Prometheus Agent、Grafana Agent、Alloy 的 `remote_write` 推送
+  - 兼容 Prometheus `scrape_configs` 静态目标导入
 - 第二层：Sentinel 标准化存储与查询层（内置 TSDB + PromQL）
   - 所有数据以统一标签模型落表，支持跨源统一查询
   - 无需在多个组件中同步规则/目标元数据
 - 第三层：可视化与告警层（Sentinel Dashboard / Alerts）
   - 使用内置 Dashboard API 与原生告警引擎，不再依赖外部 Grafana 运行时
+  - 支持导入 Grafana dashboard/datasource provisioning 和 Prometheus rule file
   - 前端图表运行时支持 Chart.js 与 ECharts 双渲染器，可针对导入面板选择更贴近 Grafana 的呈现方式
   - 面板可在运行期使用 `PromQL + SQL` 做聚合和透视，便于在不引入外部 BI 引擎的前提下实现复杂 ECharts 展示
 
