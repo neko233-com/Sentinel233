@@ -16,8 +16,6 @@ Sentinel233 不是 Grafana clone，也不是临时兼容层。它把 Grafana das
 | `/api/ecosystem/import?source=grafana-dashboard` | 接入 Grafana dashboard JSON |
 | `/api/ecosystem/alertmanager/webhook` | 接入 Alertmanager webhook payload |
 
-`/api/compat/*` 和 `/api/local/v1/compat/*` 继续保留为 legacy alias，用于已有脚本和旧自动化，不作为新接入文档的主入口。
-
 ## 接入路线
 
 1. 数据面先接入：把 Prometheus Agent、Grafana Agent、Alloy 或现有 remote_write sender 指到 `/api/v1/write`。
@@ -59,10 +57,4 @@ pwsh ./scripts/docker-ecosystem-e2e.ps1
 
 ```powershell
 pwsh ./scripts/docker-ecosystem-e2e.ps1 -UseLocalBinary
-```
-
-旧命令仍可用：
-
-```powershell
-pwsh ./scripts/docker-grafana-replacement-e2e.ps1
 ```

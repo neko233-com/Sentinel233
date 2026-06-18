@@ -114,9 +114,7 @@ func (s *Server) Router() chi.Router {
 		r.Use(s.localAgentMiddleware)
 		r.Get("/capabilities", s.handleLocalAgentCapabilities)
 		r.Get("/ecosystem/capabilities", s.handleEcosystemCapabilities)
-		r.Post("/ecosystem/import", s.handleLocalAgentImportCompatibility)
-		r.Get("/compat/capabilities", s.handleCompatCapabilities)
-		r.Post("/compat/import", s.handleLocalAgentImportCompatibility)
+		r.Post("/ecosystem/import", s.handleLocalAgentImportEcosystem)
 		r.Get("/dashboards", s.handleListDashboards)
 		r.Post("/dashboards", s.handleLocalAgentCreateDashboard)
 		r.Post("/dashboards/import", s.handleLocalAgentImportDashboard)
@@ -146,21 +144,12 @@ func (s *Server) Router() chi.Router {
 		r.Delete("/{id}", s.requireRole("admin", s.handleDeleteDashboard))
 	})
 
-	r.Post("/api/compat/alertmanager/webhook", s.handleAlertmanagerWebhookReceiver)
-
 	// First-class ecosystem import API for Grafana/Prometheus/Alertmanager files.
 	r.Route("/api/ecosystem", func(r chi.Router) {
 		r.Use(s.tenantMiddleware)
 		r.Get("/capabilities", s.requireRole("viewer", s.handleEcosystemCapabilities))
 		r.Post("/import", s.requireRole("operator", s.handleEcosystemImport))
 		r.Post("/alertmanager/webhook", s.handleAlertmanagerWebhookReceiver)
-	})
-
-	// Legacy compatibility import API kept as a stable alias for existing automation.
-	r.Route("/api/compat", func(r chi.Router) {
-		r.Use(s.tenantMiddleware)
-		r.Get("/capabilities", s.requireRole("viewer", s.handleCompatCapabilities))
-		r.Post("/import", s.requireRole("operator", s.handleImportCompatibility))
 	})
 
 	// Targets API (tenant-scoped)

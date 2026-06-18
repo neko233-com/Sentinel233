@@ -2,7 +2,7 @@
 
 ### Highlights
 - 完成 Sentinel233 与 Grafana 并行迁移场景的落地文档体系。
-- 新增「替代 Grafana 落地指南」，定义完整迁移策略、能力对照与验收清单。
+- 新增「Grafana/Prometheus 生态接入指南」，定义接入策略、能力契约与验收清单。
 - 新增批量迁移 rehearsal 脚本，可导入一批 Grafana dashboards、回导归档并生成校验报告。
 - Dashboard 前端支持 ECharts 渲染器与 `PromQL + SQL` 变换，便于实现更贴近 Grafana 的图表效果。
 - 补充 `docs/github-release-guide.md`，给出基于 `gh` 的发布、校验、回滚流程。

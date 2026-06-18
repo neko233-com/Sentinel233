@@ -22,10 +22,9 @@ func (s *Server) handleEcosystemCapabilities(w http.ResponseWriter, r *http.Requ
 		"data": map[string]interface{}{
 			"mode": "grafana-prometheus-ecosystem",
 			"stability": map[string]interface{}{
-				"contract":       "stable",
-				"primaryPrefix":  "/api/ecosystem",
-				"localPrefix":    "/api/local/v1/ecosystem",
-				"legacyPrefixes": []string{"/api/compat", "/api/local/v1/compat"},
+				"contract":      "stable",
+				"primaryPrefix": "/api/ecosystem",
+				"localPrefix":   "/api/local/v1/ecosystem",
 			},
 			"formats": []map[string]interface{}{
 				{"id": "grafana-dashboard", "contentTypes": []string{"application/json"}, "result": "dashboard"},
@@ -50,20 +49,12 @@ func (s *Server) handleEcosystemCapabilities(w http.ResponseWriter, r *http.Requ
 	})
 }
 
-func (s *Server) handleCompatCapabilities(w http.ResponseWriter, r *http.Request) {
-	s.handleEcosystemCapabilities(w, r)
-}
-
-func (s *Server) handleLocalAgentImportCompatibility(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleLocalAgentImportEcosystem(w http.ResponseWriter, r *http.Request) {
 	s.handleEcosystemImport(w, r)
 }
 
 func (s *Server) handleAlertmanagerWebhookReceiver(w http.ResponseWriter, r *http.Request) {
 	s.importAlertmanagerWebhook(w, r, s.getTenantID(r), "alertmanager-webhook")
-}
-
-func (s *Server) handleImportCompatibility(w http.ResponseWriter, r *http.Request) {
-	s.handleEcosystemImport(w, r)
 }
 
 func (s *Server) handleEcosystemImport(w http.ResponseWriter, r *http.Request) {

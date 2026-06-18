@@ -5,9 +5,8 @@ All notable changes to Sentinel233 will be documented in this file.
 ## [Unreleased]
 
 ### Added
-- Added first-class `/api/ecosystem/capabilities`, `/api/ecosystem/import`, and `/api/ecosystem/alertmanager/webhook` endpoints for stable Grafana/Prometheus/Alertmanager ecosystem integration; `/api/compat/*` remains as a legacy alias.
-- Added `scripts/docker-ecosystem-e2e.ps1` as the primary Docker ecosystem verification script while keeping the old Grafana replacement script name as a wrapper.
-- Kept `/api/compat/import` and loopback `/api/local/v1/compat/import` as legacy aliases for existing Grafana/Prometheus automation.
+- Added first-class `/api/ecosystem/capabilities`, `/api/ecosystem/import`, and `/api/ecosystem/alertmanager/webhook` endpoints for stable Grafana/Prometheus/Alertmanager ecosystem integration.
+- Added `scripts/docker-ecosystem-e2e.ps1` as the primary Docker ecosystem verification script.
 - Added Prometheus-compatible discovery and metadata endpoints including `/api/v1/labels`, `/api/v1/metadata`, `/api/v1/targets/metadata`, `/api/v1/status/tsdb`, `/api/v1/alertmanagers`, and `/api/v1/query_exemplars`.
 - Expanded Docker ecosystem E2E validation to cover login, ecosystem imports, remote_write, PromQL, dashboard import/export, and Alertmanager webhook.
 - Added an independent HTML-driven GitHub Pages documentation site under `site/`.
@@ -19,11 +18,14 @@ All notable changes to Sentinel233 will be documented in this file.
 - Expanded PromQL compatibility for braced selectors, trailing aggregation grouping, `or/and/unless`, `time`, `timestamp`, `scalar`, `sort`, and `histogram_quantile`.
 - Optimized CI and release packaging with Go cache, Docker E2E coverage, and matrixed release builds.
 
+### Removed
+- Removed legacy ecosystem aliases, old wrapper scripts, and old guide paths so new deployments use only the current ecosystem API and tooling.
+
 ## [v0.2.3] - 2026-06-15
 
 ### Added
 - Added operational documentation for replacing Grafana in production with Sentinel233.
-- Added migration guide (`docs/grafana-replacement-guide.md`) covering capability matrix, rollout plan, and acceptance checklist.
+- Added migration guide (`docs/ecosystem-integration-guide.md`) covering capability matrix, rollout plan, and acceptance checklist.
 - Added GitHub release playbook (`docs/github-release-guide.md`) and release notes (`docs/github-release-notes.md`) for `gh`-based publishing.
 - Added dashboard migration rehearsal script (`scripts/dashboard-migrate.ps1`) for batch import, export archiving, and validation summaries.
 - Clarified integration docs with an explicit Grafana migration workflow.

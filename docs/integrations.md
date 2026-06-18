@@ -62,8 +62,6 @@ Alertmanager webhook receiver:
 POST /api/ecosystem/alertmanager/webhook
 ```
 
-`/api/compat/*` remains available as a legacy alias for existing automation, but new integrations should target `/api/ecosystem/*`.
-
 ### Grafana/Prometheus 生态接入工作流（生产落地建议）
 
 在接管 Grafana/Prometheus 生态的生产场景中，建议按三层接入分离：

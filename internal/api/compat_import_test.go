@@ -25,7 +25,7 @@ scrape_configs:
         labels:
           env: prod
 `
-	req := httptest.NewRequest(http.MethodPost, "/api/local/v1/compat/import?source=prometheus-config", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/api/local/v1/ecosystem/import?source=prometheus-config", strings.NewReader(body))
 	req.RemoteAddr = "127.0.0.1:12345"
 	req.Header.Set("Content-Type", "application/yaml")
 	rec := httptest.NewRecorder()
@@ -65,7 +65,7 @@ groups:
       - record: job:http_requests:rate5m
         expr: sum(rate(http_requests_total[5m])) by (job)
 `
-	req := httptest.NewRequest(http.MethodPost, "/api/local/v1/compat/import?source=prometheus-rules", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/api/local/v1/ecosystem/import?source=prometheus-rules", strings.NewReader(body))
 	req.RemoteAddr = "127.0.0.1:12345"
 	req.Header.Set("Content-Type", "application/yaml")
 	rec := httptest.NewRecorder()
@@ -103,7 +103,7 @@ datasources:
     access: proxy
     isDefault: true
 `
-	req := httptest.NewRequest(http.MethodPost, "/api/local/v1/compat/import?source=grafana-datasources", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/api/local/v1/ecosystem/import?source=grafana-datasources", strings.NewReader(body))
 	req.RemoteAddr = "127.0.0.1:12345"
 	req.Header.Set("Content-Type", "application/yaml")
 	rec := httptest.NewRecorder()
@@ -178,7 +178,8 @@ func TestAlertmanagerWebhookReceiverAcceptsPublicPayload(t *testing.T) {
 	defer cleanup()
 
 	body := []byte(`{"receiver":"sentinel","status":"firing","alerts":[{"labels":{"alertname":"InstanceDown"}}]}`)
-	req := httptest.NewRequest(http.MethodPost, "/api/compat/alertmanager/webhook", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/api/ecosystem/alertmanager/webhook", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+testLoginToken(t, server))
 	rec := httptest.NewRecorder()
 
 	server.Router().ServeHTTP(rec, req)

@@ -15,7 +15,7 @@ git status --short -b
 2. 生成变更说明（可先在本地 `docs` 目录补齐）
 
 ```bash
-cat docs/grafana-replacement-guide.md
+cat docs/ecosystem-integration-guide.md
 ```
 
 3. 更新 `CHANGELOG.md` 后，准备发布内容
@@ -39,7 +39,7 @@ gh release create v0.2.3 \
 
 ```bash
 gh release upload v0.2.3 \
-  docs/grafana-replacement-guide.md \
+  docs/ecosystem-integration-guide.md \
   docs/integrations.md
 ```
 
@@ -55,7 +55,7 @@ gh release create v0.2.3 \
   --title "v0.2.3 - Grafana Compatibility, Local Agent API, and Migration Rehearsal" \
   --notes-file docs/github-release-notes.md \
   --verify-tag \
-  docs/grafana-replacement-guide.md docs/integrations.md
+  docs/ecosystem-integration-guide.md docs/integrations.md
 gh release view v0.2.3 --json tagName,name,createdAt,author,url
 ```
 

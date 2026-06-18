@@ -256,8 +256,6 @@ docker run -d -p 23390:23390 -p 23391:23391 -v sentinel233-data:/data sentinel23
 | `/api/ecosystem/import?source=grafana-dashboard` | POST | 导入 Grafana dashboard JSON |
 | `/api/ecosystem/alertmanager/webhook` | POST | 接收 Alertmanager webhook payload 并保留最近一次 payload |
 
-`/api/compat/*` 仍保留为 legacy alias，已有脚本无需立刻修改；新接入建议统一使用 `/api/ecosystem/*`。
-
 ### Local Agent API
 
 仅允许本机 `127.0.0.1` / `::1` 访问，目的是让本地 agent、自动化脚本或 Codex 运行时直接操控 dashboard，不需要人工登录拿 token。
@@ -267,7 +265,6 @@ docker run -d -p 23390:23390 -p 23391:23391 -v sentinel233-data:/data sentinel23
 | `/api/local/v1/capabilities` | GET | 返回本机 agent 能力描述 |
 | `/api/local/v1/ecosystem/capabilities` | GET | 返回本机生态格式导入能力 |
 | `/api/local/v1/ecosystem/import` | POST | loopback-only 导入 Grafana/Prometheus 生态配置 |
-| `/api/local/v1/compat/*` | GET/POST | legacy alias，保留给旧自动化 |
 | `/api/local/v1/dashboards` | GET | 列出 dashboard |
 | `/api/local/v1/dashboards` | POST | 直接创建 dashboard |
 | `/api/local/v1/dashboards/import` | POST | 直接导入 Grafana 或 Sentinel dashboard JSON |
@@ -342,7 +339,6 @@ curl -X POST http://127.0.0.1:23390/api/local/v1/dashboards/1/panels \
 | `scripts/install-server.ps1` | Windows Server 安装 |
 | `scripts/install-server.sh` | Linux/macOS Server 安装 |
 | `scripts/docker-ecosystem-e2e.ps1` | Docker 全链路 Grafana/Prometheus 生态接入验证 |
-| `scripts/docker-grafana-replacement-e2e.ps1` | 旧脚本名 wrapper，转发到 ecosystem E2E |
 | `scripts/dashboard-migrate.ps1` | 批量导入 Grafana dashboard、导出归档并生成校验报告 |
 
 ## 开发
@@ -392,7 +388,6 @@ sentinel233-agent [flags]
 | [configs/sentinel233.yaml.example](configs/sentinel233.yaml.example) | 配置文件示例 |
 | [docs/integrations.md](docs/integrations.md) | 接入与采集方式说明 |
 | [docs/ecosystem-integration-guide.md](docs/ecosystem-integration-guide.md) | Grafana/Prometheus 生态接入指南 |
-| [docs/grafana-replacement-guide.md](docs/grafana-replacement-guide.md) | 旧链接保留说明 |
 | [docs/github-release-guide.md](docs/github-release-guide.md) | 使用 `gh` 进行发布与文档发布流程 |
 | [docs/github-release-notes.md](docs/github-release-notes.md) | 本次发布说明与可直接发布的 release notes |
 | [site/index.html](site/index.html) | GitHub Pages HTML 文档站入口 |
