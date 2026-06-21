@@ -70,7 +70,17 @@ func NewSeries(labels Labels) *Series {
 func (s *Series) Append(ts int64, v float64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.samples = append(s.samples, Sample{Timestamp: ts, Value: v})
+	sample := Sample{Timestamp: ts, Value: v}
+	if len(s.samples) == 0 || ts >= s.samples[len(s.samples)-1].Timestamp {
+		s.samples = append(s.samples, sample)
+		return
+	}
+	i := sort.Search(len(s.samples), func(i int) bool {
+		return s.samples[i].Timestamp > ts
+	})
+	s.samples = append(s.samples, Sample{})
+	copy(s.samples[i+1:], s.samples[i:])
+	s.samples[i] = sample
 }
 
 func (s *Series) Samples() []Sample {
@@ -84,12 +94,20 @@ func (s *Series) Samples() []Sample {
 func (s *Series) Range(mint, maxt int64) []Sample {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	var result []Sample
-	for _, sp := range s.samples {
-		if sp.Timestamp >= mint && sp.Timestamp <= maxt {
-			result = append(result, sp)
-		}
+	if len(s.samples) == 0 || maxt < mint {
+		return nil
 	}
+	start := sort.Search(len(s.samples), func(i int) bool {
+		return s.samples[i].Timestamp >= mint
+	})
+	end := sort.Search(len(s.samples), func(i int) bool {
+		return s.samples[i].Timestamp > maxt
+	})
+	if start >= end {
+		return nil
+	}
+	result := make([]Sample, end-start)
+	copy(result, s.samples[start:end])
 	return result
 }
 
@@ -108,17 +126,41 @@ func (s *Series) TrimBefore(ts int64) {
 	i := sort.Search(len(s.samples), func(i int) bool {
 		return s.samples[i].Timestamp >= ts
 	})
-	s.samples = s.samples[i:]
+	if i == 0 {
+		return
+	}
+	if i >= len(s.samples) {
+		s.samples = s.samples[:0]
+		return
+	}
+	kept := len(s.samples) - i
+	next := make([]Sample, kept, nextSampleCapacity(kept))
+	copy(next, s.samples[i:])
+	s.samples = next
+}
+
+func (s *Series) Empty() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.samples) == 0
+}
+
+func nextSampleCapacity(n int) int {
+	if n < 256 {
+		return 256
+	}
+	return n
 }
 
 type DB struct {
 	series map[uint64]*Series
 	mu     sync.RWMutex
 
-	retention time.Duration
-	dataDir   string
-	wal       *WAL
-	stopCh    chan struct{}
+	retention   time.Duration
+	retentionMu sync.RWMutex
+	dataDir     string
+	wal         *WAL
+	stopCh      chan struct{}
 }
 
 type DBConfig struct {
@@ -198,6 +240,23 @@ func (db *DB) Query(labels Labels, mint, maxt int64) []Sample {
 	return s.Range(mint, maxt)
 }
 
+func (db *DB) SetRetention(retention time.Duration) error {
+	if retention <= 0 {
+		return nil
+	}
+	db.retentionMu.Lock()
+	db.retention = retention
+	db.retentionMu.Unlock()
+	db.Compact()
+	return nil
+}
+
+func (db *DB) Retention() time.Duration {
+	db.retentionMu.RLock()
+	defer db.retentionMu.RUnlock()
+	return db.retention
+}
+
 func (db *DB) QueryByMatcher(matcher LabelMatcher, mint, maxt int64) map[uint64]*Series {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
@@ -242,24 +301,26 @@ func (db *DB) runCompaction(interval time.Duration) {
 	for {
 		select {
 		case <-ticker.C:
-			db.compact()
+			db.Compact()
 		case <-db.stopCh:
 			return
 		}
 	}
 }
 
-func (db *DB) compact() {
-	cutoff := time.Now().Add(-db.retention).UnixMilli()
-	db.mu.RLock()
-	series := make([]*Series, 0, len(db.series))
-	for _, s := range db.series {
-		series = append(series, s)
-	}
-	db.mu.RUnlock()
-	for _, s := range series {
+func (db *DB) Compact() {
+	retention := db.Retention()
+	cutoff := time.Now().Add(-retention).UnixMilli()
+
+	db.mu.Lock()
+	for hash, s := range db.series {
 		s.TrimBefore(cutoff)
+		if s.Empty() {
+			delete(db.series, hash)
+		}
 	}
+	db.mu.Unlock()
+
 	entries := db.snapshotEntries()
 	if err := db.wal.WriteSnapshot(entries); err != nil {
 		return
@@ -269,15 +330,21 @@ func (db *DB) compact() {
 	}
 }
 
+func (db *DB) compact() {
+	db.Compact()
+}
+
 func (db *DB) snapshotEntries() []WALEntry {
 	db.mu.RLock()
 	series := make([]*Series, 0, len(db.series))
+	total := 0
 	for _, s := range db.series {
 		series = append(series, s)
+		total += len(s.Samples())
 	}
 	db.mu.RUnlock()
 
-	var entries []WALEntry
+	entries := make([]WALEntry, 0, total)
 	for _, s := range series {
 		for _, sample := range s.Samples() {
 			entries = append(entries, WALEntry{

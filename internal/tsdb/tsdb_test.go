@@ -224,6 +224,56 @@ func TestSeriesTrimBefore(t *testing.T) {
 	}
 }
 
+func TestSeriesRangeUsesTimeOrderForOutOfOrderAppends(t *testing.T) {
+	s := NewSeries(Labels{{Name: "__name__", Value: "test"}})
+	s.Append(3000, 3)
+	s.Append(1000, 1)
+	s.Append(2000, 2)
+
+	samples := s.Range(1000, 3000)
+	if len(samples) != 3 {
+		t.Fatalf("expected 3 samples, got %d", len(samples))
+	}
+	for i, sample := range samples {
+		want := int64((i + 1) * 1000)
+		if sample.Timestamp != want {
+			t.Fatalf("sample %d timestamp = %d, want %d", i, sample.Timestamp, want)
+		}
+	}
+}
+
+func TestDBSetRetentionCompactsImmediately(t *testing.T) {
+	dir, _ := os.MkdirTemp("", "tsdb-retention-*")
+	defer os.RemoveAll(dir)
+	db, err := OpenDB(DBConfig{DataDir: dir, Retention: 24 * time.Hour, FlushInterval: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	oldLabels := Labels{{Name: "__name__", Value: "old_metric"}}
+	newLabels := Labels{{Name: "__name__", Value: "new_metric"}}
+	if err := db.Append(oldLabels, time.Now().Add(-48*time.Hour).UnixMilli(), 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Append(newLabels, time.Now().UnixMilli(), 2); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := db.SetRetention(8 * time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if db.SeriesCount() != 1 {
+		t.Fatalf("expected 1 retained series, got %d", db.SeriesCount())
+	}
+	if got := db.Query(oldLabels, 0, time.Now().UnixMilli()); len(got) != 0 {
+		t.Fatalf("expected old samples to be compacted, got %d", len(got))
+	}
+	if got := db.Query(newLabels, 0, time.Now().UnixMilli()); len(got) != 1 {
+		t.Fatalf("expected new sample to remain, got %d", len(got))
+	}
+}
+
 func TestQueryByMatcher(t *testing.T) {
 	dir, _ := os.MkdirTemp("", "tsdb-matcher-*")
 	defer os.RemoveAll(dir)

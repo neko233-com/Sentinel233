@@ -129,7 +129,7 @@ func (s *Store) migrate() error {
 			name TEXT NOT NULL,
 			description TEXT DEFAULT '',
 			max_series INTEGER DEFAULT 100000,
-			max_retention_days INTEGER DEFAULT 15,
+			max_retention_days INTEGER DEFAULT 8,
 			enabled INTEGER DEFAULT 1,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -724,7 +724,7 @@ func CreateDefaultTenant(s *Store) error {
 		Name:         "Default",
 		Description:  "Default tenant",
 		MaxSeries:    100000,
-		MaxRetention: 15,
+		MaxRetention: 8,
 		Enabled:      true,
 	}
 	return s.CreateTenant(t)

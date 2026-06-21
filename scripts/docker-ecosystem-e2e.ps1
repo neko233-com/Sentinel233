@@ -344,6 +344,7 @@ groups:
     hostname = "docker-node-1"
     version = "e2e"
     listen_addr = ":23391"
+    enrollment_token = "sentinel233-agent"
     labels = @{ role = "linux"; env = "e2e" }
   } | ConvertTo-Json -Depth 10
   $agentRegister = Invoke-JsonApi -Method "POST" -Url "$BaseUrl/api/agent/v1/register" -Body $agentRegisterBody

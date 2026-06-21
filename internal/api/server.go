@@ -349,6 +349,28 @@ func extractToken(r *http.Request) string {
 	return r.URL.Query().Get("token")
 }
 
+func (s *Server) verifyAgentEnrollmentToken(w http.ResponseWriter, r *http.Request, provided string) bool {
+	expected := ""
+	if s.config != nil {
+		expected = strings.TrimSpace(s.config.Agent.EnrollmentToken)
+	}
+	if expected == "" {
+		return true
+	}
+	candidate := strings.TrimSpace(provided)
+	if candidate == "" {
+		candidate = strings.TrimSpace(r.Header.Get("X-Sentinel-Agent-Token"))
+	}
+	if candidate == "" {
+		candidate = strings.TrimSpace(r.URL.Query().Get("enrollment_token"))
+	}
+	if candidate != expected {
+		s.jsonError(w, "invalid agent enrollment token", http.StatusUnauthorized)
+		return false
+	}
+	return true
+}
+
 func roleAtLeast(userRole, minRole string) bool {
 	levels := map[string]int{"viewer": 0, "operator": 1, "admin": 2}
 	return levels[userRole] >= levels[minRole]
@@ -406,16 +428,20 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleAgentRegister(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		TenantID   int64             `json:"tenant_id"`
-		AgentID    string            `json:"agent_id"`
-		Name       string            `json:"name"`
-		Hostname   string            `json:"hostname"`
-		Version    string            `json:"version"`
-		ListenAddr string            `json:"listen_addr"`
-		Labels     map[string]string `json:"labels"`
+		TenantID        int64             `json:"tenant_id"`
+		AgentID         string            `json:"agent_id"`
+		Name            string            `json:"name"`
+		Hostname        string            `json:"hostname"`
+		Version         string            `json:"version"`
+		ListenAddr      string            `json:"listen_addr"`
+		EnrollmentToken string            `json:"enrollment_token"`
+		Labels          map[string]string `json:"labels"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		s.jsonError(w, "invalid agent registration payload", http.StatusBadRequest)
+		return
+	}
+	if !s.verifyAgentEnrollmentToken(w, r, req.EnrollmentToken) {
 		return
 	}
 	tenantID := req.TenantID
@@ -1905,8 +1931,16 @@ func (s *Server) handleUpdateAdminConfig(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	prev := s.config
+	applied := []string{"scrape targets", "scrape timeout", "agent labels"}
+	if s.db != nil {
+		s.db.SetRetention(time.Duration(next.Storage.RetentionDays) * 24 * time.Hour)
+		applied = append(applied, "storage retention")
+	}
 	s.config = &next
-	s.scrape.ApplyConfig(next.Scrape)
+	if s.scrape != nil {
+		s.scrape.ApplyConfig(next.Scrape)
+	}
 
 	if data, err := json.Marshal(next); err == nil {
 		tenantID := s.getTenantID(r)
@@ -1919,10 +1953,26 @@ func (s *Server) handleUpdateAdminConfig(w http.ResponseWriter, r *http.Request)
 		"status": "success",
 		"data": map[string]interface{}{
 			"config":        s.config,
-			"restartNeeded": true,
-			"applied":       []string{"scrape targets", "scrape timeout", "agent labels"},
+			"restartNeeded": restartNeededAfterConfigUpdate(prev, &next),
+			"applied":       applied,
 		},
 	})
+}
+
+func restartNeededAfterConfigUpdate(prev, next *config.Config) bool {
+	if prev == nil || next == nil {
+		return true
+	}
+	if prev.Server != next.Server {
+		return true
+	}
+	if prev.Storage.DataDir != next.Storage.DataDir ||
+		prev.Storage.FlushInterval != next.Storage.FlushInterval ||
+		prev.Storage.MaxOpenFiles != next.Storage.MaxOpenFiles ||
+		prev.Storage.CompactionEvery != next.Storage.CompactionEvery {
+		return true
+	}
+	return false
 }
 
 func validateRuntimeConfig(cfg *config.Config) error {

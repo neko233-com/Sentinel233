@@ -37,16 +37,24 @@ The endpoint accepts the standard Prometheus remote write protobuf `WriteRequest
 
 ## Agent first control plane
 
-Machines can run `sentinel233-agent` to register with the server, send heartbeat/runtime metrics, poll assigned tasks, and report task results. This makes the server the operational control plane instead of only a passive metrics store.
+Machines can run `sentinel233-agent` to register with the server, send heartbeat/runtime metrics, poll assigned tasks, and report task results. This makes the server the operational control plane instead of only a passive metrics store. Registration requires the configured `agent.enrollment_token` through the JSON body, `X-Sentinel-Agent-Token`, or `?enrollment_token=`.
 
 | Endpoint | Purpose |
 |---|---|
-| `POST /api/agent/v1/register` | Register an agent and receive an agent token. |
+| `POST /api/agent/v1/register` | Enroll an agent and receive an agent token. |
 | `POST /api/agent/v1/heartbeat` | Send labels, runtime metrics, version, and liveness. |
 | `GET /api/agent/v1/tasks` | Claim pending tasks assigned by the server. |
 | `POST /api/agent/v1/tasks/{id}/complete` | Report task completion or failure. |
 | `GET /api/agents` | Operator view of registered agents. |
 | `POST /api/agents/{agentID}/tasks` | Assign a task to a specific agent. |
+
+Supported first-party task types are deliberately safe and explicit:
+
+| Task type | Payload | Result |
+|---|---|---|
+| `refresh_config` | `{}` | Agent version, listen address, and labels. |
+| `health_check` | `{"url":"http://host:port/healthz"}` | HTTP status and bounded response metadata. |
+| `scrape_once` | `{"url":"http://host:port/metrics"}` | HTTP status plus up to 4 KiB of metrics body. |
 
 Example Prometheus configuration:
 

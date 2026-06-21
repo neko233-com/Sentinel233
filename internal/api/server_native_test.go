@@ -153,6 +153,14 @@ func TestAgentControlPlaneRegisterHeartbeatTasks(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/agent/v1/register", bytes.NewReader(registerBody))
 	rec := httptest.NewRecorder()
 	server.Router().ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("register without enrollment token status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	registerBody = []byte(`{"agent_id":"node-1","name":"node-1","hostname":"node-1","version":"test","listen_addr":":23391","enrollment_token":"sentinel233-agent","labels":{"role":"linux"}}`)
+	req = httptest.NewRequest(http.MethodPost, "/api/agent/v1/register", bytes.NewReader(registerBody))
+	rec = httptest.NewRecorder()
+	server.Router().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("register status = %d, body = %s", rec.Code, rec.Body.String())
 	}

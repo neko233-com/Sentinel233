@@ -55,8 +55,9 @@ type AlertRule struct {
 }
 
 type AgentConfig struct {
-	ListenAddr string            `yaml:"listen_addr" json:"listen_addr"`
-	Labels     map[string]string `yaml:"labels" json:"labels"`
+	ListenAddr      string            `yaml:"listen_addr" json:"listen_addr"`
+	EnrollmentToken string            `yaml:"enrollment_token" json:"enrollment_token"`
+	Labels          map[string]string `yaml:"labels" json:"labels"`
 }
 
 type LocalAPIConfig struct {
@@ -77,7 +78,7 @@ func DefaultConfig() *Config {
 		},
 		Storage: StorageConfig{
 			DataDir:         "./data",
-			RetentionDays:   15,
+			RetentionDays:   8,
 			FlushInterval:   10,
 			MaxOpenFiles:    1024,
 			CompactionEvery: 3600,
@@ -90,7 +91,8 @@ func DefaultConfig() *Config {
 			Enabled: true,
 		},
 		Agent: AgentConfig{
-			ListenAddr: "0.0.0.0:23391",
+			ListenAddr:      "0.0.0.0:23391",
+			EnrollmentToken: "sentinel233-agent",
 		},
 		LocalAPI: LocalAPIConfig{
 			Enabled:  true,

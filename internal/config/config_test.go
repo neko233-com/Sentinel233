@@ -11,8 +11,8 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.Server.Port != 23390 {
 		t.Fatalf("expected port 23390, got %d", cfg.Server.Port)
 	}
-	if cfg.Storage.RetentionDays != 15 {
-		t.Fatalf("expected retention 15, got %d", cfg.Storage.RetentionDays)
+	if cfg.Storage.RetentionDays != 8 {
+		t.Fatalf("expected retention 8, got %d", cfg.Storage.RetentionDays)
 	}
 	if cfg.Scrape.Interval != 15 {
 		t.Fatalf("expected scrape interval 15, got %d", cfg.Scrape.Interval)
@@ -25,6 +25,9 @@ func TestDefaultConfig(t *testing.T) {
 	}
 	if cfg.LocalAPI.TenantID != 1 {
 		t.Fatalf("expected local api tenant 1, got %d", cfg.LocalAPI.TenantID)
+	}
+	if cfg.Agent.EnrollmentToken == "" {
+		t.Fatal("expected default agent enrollment token for local bootstrap")
 	}
 }
 

@@ -1,6 +1,7 @@
 package serverapp
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -55,17 +56,6 @@ func Run(args []string) {
 
 	logger.Info("starting sentinel233-server", "version", version.Version, "addr", addr, "data", dataDir)
 
-	db, err := tsdb.OpenDB(tsdb.DBConfig{
-		DataDir:       dataDir,
-		Retention:     time.Duration(cfg.Storage.RetentionDays) * 24 * time.Hour,
-		FlushInterval: time.Duration(cfg.Storage.FlushInterval) * time.Second,
-	})
-	if err != nil {
-		logger.Error("open tsdb failed", "err", err)
-		os.Exit(1)
-	}
-	defer db.Close()
-
 	st, err := store.Open(dataDir)
 	if err != nil {
 		logger.Error("open store failed", "err", err)
@@ -79,6 +69,24 @@ func Run(args []string) {
 	if err := store.CreateDefaultRoot(st); err != nil {
 		logger.Error("create default root failed", "err", err)
 	}
+	if runtimeConfig, err := st.GetSetting(1, "runtime_config"); err == nil && runtimeConfig != "" {
+		if err := json.Unmarshal([]byte(runtimeConfig), cfg); err != nil {
+			logger.Warn("ignore invalid persisted runtime config", "err", err)
+		} else {
+			logger.Info("loaded persisted runtime config", "retention_days", cfg.Storage.RetentionDays)
+		}
+	}
+
+	db, err := tsdb.OpenDB(tsdb.DBConfig{
+		DataDir:       dataDir,
+		Retention:     time.Duration(cfg.Storage.RetentionDays) * 24 * time.Hour,
+		FlushInterval: time.Duration(cfg.Storage.FlushInterval) * time.Second,
+	})
+	if err != nil {
+		logger.Error("open tsdb failed", "err", err)
+		os.Exit(1)
+	}
+	defer db.Close()
 
 	engine := promql.NewEngine(db)
 	scrapeMgr := scrape.NewManager(db, cfg.Scrape, logger)

@@ -19,18 +19,22 @@ import (
 )
 
 var (
-	listenAddr string
-	serverURL  string
-	agentID    string
-	labelsText string
-	interval   int
-	showVer    bool
+	listenAddr  string
+	serverURL   string
+	agentID     string
+	enrollToken string
+	labelsText  string
+	interval    int
+	showVer     bool
 )
+
+const defaultEnrollmentToken = "sentinel233-agent"
 
 func main() {
 	flag.StringVar(&listenAddr, "addr", ":23391", "agent metrics listen address")
 	flag.StringVar(&serverURL, "server", "http://localhost:23390", "sentinel233 server URL")
 	flag.StringVar(&agentID, "id", "", "stable agent id; defaults to hostname")
+	flag.StringVar(&enrollToken, "enroll-token", os.Getenv("SENTINEL233_AGENT_ENROLL_TOKEN"), "agent enrollment token")
 	flag.StringVar(&labelsText, "labels", "", "comma-separated labels, for example env=prod,role=mysql")
 	flag.IntVar(&interval, "interval", 15, "push interval in seconds")
 	flag.BoolVar(&showVer, "version", false, "show version")
@@ -39,6 +43,9 @@ func main() {
 	if showVer {
 		fmt.Println(version.Full())
 		return
+	}
+	if strings.TrimSpace(enrollToken) == "" {
+		enrollToken = defaultEnrollmentToken
 	}
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
@@ -63,7 +70,7 @@ func main() {
 		}
 	}()
 
-	go runControlPlane(logger, serverURL, agentID, hostname, listenAddr, labels, time.Duration(interval)*time.Second)
+	go runControlPlane(logger, serverURL, agentID, hostname, listenAddr, enrollToken, labels, time.Duration(interval)*time.Second)
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
@@ -122,7 +129,7 @@ func handleMetrics(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(sb.String()))
 }
 
-func runControlPlane(logger *slog.Logger, server, id, hostname, listen string, labels map[string]string, every time.Duration) {
+func runControlPlane(logger *slog.Logger, server, id, hostname, listen, enrollment string, labels map[string]string, every time.Duration) {
 	if every <= 0 {
 		every = 15 * time.Second
 	}
@@ -130,7 +137,7 @@ func runControlPlane(logger *slog.Logger, server, id, hostname, listen string, l
 	token := ""
 	for {
 		if token == "" {
-			nextToken, err := registerAgent(client, server, id, hostname, listen, labels)
+			nextToken, err := registerAgent(client, server, id, hostname, listen, enrollment, labels)
 			if err != nil {
 				logger.Warn("agent registration failed", "err", err)
 				time.Sleep(every)
@@ -145,21 +152,22 @@ func runControlPlane(logger *slog.Logger, server, id, hostname, listen string, l
 			time.Sleep(every)
 			continue
 		}
-		if err := processTasks(client, server, token, logger); err != nil {
+		if err := processTasks(client, server, token, listen, labels, logger); err != nil {
 			logger.Warn("agent task poll failed", "err", err)
 		}
 		time.Sleep(every)
 	}
 }
 
-func registerAgent(client *http.Client, server, id, hostname, listen string, labels map[string]string) (string, error) {
+func registerAgent(client *http.Client, server, id, hostname, listen, enrollment string, labels map[string]string) (string, error) {
 	body := map[string]interface{}{
-		"agent_id":    id,
-		"name":        id,
-		"hostname":    hostname,
-		"version":     version.Version,
-		"listen_addr": listen,
-		"labels":      labels,
+		"agent_id":         id,
+		"name":             id,
+		"hostname":         hostname,
+		"version":          version.Version,
+		"listen_addr":      listen,
+		"enrollment_token": enrollment,
+		"labels":           labels,
 	}
 	var resp struct {
 		Data struct {
@@ -193,7 +201,7 @@ func heartbeatAgent(client *http.Client, server, token, listen string, labels ma
 	return postJSON(client, server+"/api/agent/v1/heartbeat", token, body, nil)
 }
 
-func processTasks(client *http.Client, server, token string, logger *slog.Logger) error {
+func processTasks(client *http.Client, server, token, listen string, labels map[string]string, logger *slog.Logger) error {
 	req, err := http.NewRequest(http.MethodGet, server+"/api/agent/v1/tasks", nil)
 	if err != nil {
 		return err
@@ -209,23 +217,96 @@ func processTasks(client *http.Client, server, token string, logger *slog.Logger
 		return fmt.Errorf("tasks status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 	var envelope struct {
-		Data []struct {
-			ID      int64  `json:"id"`
-			Type    string `json:"type"`
-			Payload string `json:"payload"`
-		} `json:"data"`
+		Data []agentTask `json:"data"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
 		return err
 	}
 	for _, task := range envelope.Data {
 		logger.Info("agent task claimed", "id", task.ID, "type", task.Type)
-		result := fmt.Sprintf("acknowledged task %s", task.Type)
-		if err := postJSON(client, fmt.Sprintf("%s/api/agent/v1/tasks/%d/complete", server, task.ID), token, map[string]string{"result": result}, nil); err != nil {
+		result, taskErr := executeTask(client, task, listen, labels)
+		body := map[string]string{"result": result}
+		if taskErr != nil {
+			body["error"] = taskErr.Error()
+		}
+		if err := postJSON(client, fmt.Sprintf("%s/api/agent/v1/tasks/%d/complete", server, task.ID), token, body, nil); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+type agentTask struct {
+	ID      int64  `json:"id"`
+	Type    string `json:"type"`
+	Payload string `json:"payload"`
+}
+
+func executeTask(client *http.Client, task agentTask, listen string, labels map[string]string) (string, error) {
+	payload := map[string]string{}
+	if strings.TrimSpace(task.Payload) != "" {
+		_ = json.Unmarshal([]byte(task.Payload), &payload)
+	}
+	switch strings.TrimSpace(task.Type) {
+	case "refresh_config":
+		return jsonResult(map[string]interface{}{
+			"version":     version.Version,
+			"listen_addr": listen,
+			"labels":      labels,
+		})
+	case "health_check":
+		target := strings.TrimSpace(payload["url"])
+		if target == "" {
+			return "", fmt.Errorf("health_check requires payload.url")
+		}
+		return getURLSummary(client, target, false)
+	case "scrape_once":
+		target := strings.TrimSpace(payload["url"])
+		if target == "" {
+			return "", fmt.Errorf("scrape_once requires payload.url")
+		}
+		return getURLSummary(client, target, true)
+	default:
+		return "", fmt.Errorf("unsupported agent task type %q", task.Type)
+	}
+}
+
+func getURLSummary(client *http.Client, target string, includeBody bool) (string, error) {
+	req, err := http.NewRequest(http.MethodGet, target, nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	data, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	result := map[string]interface{}{
+		"url":         target,
+		"status_code": resp.StatusCode,
+		"content_len": len(data),
+	}
+	if includeBody {
+		result["body"] = string(data)
+	}
+	out, err := jsonResult(result)
+	if err != nil {
+		return "", err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return out, fmt.Errorf("GET %s returned status %d", target, resp.StatusCode)
+	}
+	return out, nil
+}
+
+func jsonResult(value interface{}) (string, error) {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
 }
 
 func postJSON(client *http.Client, url, token string, payload interface{}, out interface{}) error {

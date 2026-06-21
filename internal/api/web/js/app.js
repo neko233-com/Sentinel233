@@ -319,15 +319,15 @@ const grafanaTypeMap = {
 const configPresets = {
   laptop: {
     label: '开发机轻量模式',
-    patch: { storage: { retention_days: 7, flush_interval_seconds: 10, max_open_files: 256, compaction_every_seconds: 1800 }, scrape: { interval_seconds: 30, timeout_seconds: 8 } },
+    patch: { storage: { retention_days: 3, flush_interval_seconds: 10, max_open_files: 256, compaction_every_seconds: 1800 }, scrape: { interval_seconds: 30, timeout_seconds: 8 } },
   },
   prod: {
-    label: '生产默认模式',
-    patch: { storage: { retention_days: 30, flush_interval_seconds: 5, max_open_files: 2048, compaction_every_seconds: 1800 }, scrape: { interval_seconds: 15, timeout_seconds: 10 } },
+    label: '实时默认模式',
+    patch: { storage: { retention_days: 8, flush_interval_seconds: 5, max_open_files: 2048, compaction_every_seconds: 1800 }, scrape: { interval_seconds: 15, timeout_seconds: 10 } },
   },
   dense: {
     label: '高频采集模式',
-    patch: { storage: { retention_days: 15, flush_interval_seconds: 3, max_open_files: 4096, compaction_every_seconds: 900 }, scrape: { interval_seconds: 5, timeout_seconds: 4 } },
+    patch: { storage: { retention_days: 2, flush_interval_seconds: 3, max_open_files: 4096, compaction_every_seconds: 900 }, scrape: { interval_seconds: 5, timeout_seconds: 4 } },
   },
 };
 
@@ -1310,9 +1310,9 @@ async function loadConfigSummary() {
   try {
     const resp = await api(session?.token ? '/api/admin/config' : '/api/v1/status/config');
     const cfg = resp.data?.config || resp.data || {};
-    el.textContent = `${cfg.storage?.retention_days || cfg.Storage?.RetentionDays || 15} 天`;
+    el.textContent = `${cfg.storage?.retention_days || cfg.Storage?.RetentionDays || 8} 天`;
   } catch {
-    el.textContent = '15 天';
+    el.textContent = '8 天';
   }
 }
 
@@ -2107,12 +2107,13 @@ function renderConfigEditor() {
         <div class="section-title"><div><h2>后台配置</h2><p>表单和 JSON 共用同一份配置。</p></div><button class="btn btn-primary" onclick="saveConfigFromForm()">应用配置</button></div>
         <div class="form-grid">
           <div class="form-group"><label>数据目录</label><input id="cfg-data-dir" value="${escapeHtml(cfg.storage.data_dir)}"></div>
-          <div class="form-group"><label>保留天数</label><input id="cfg-retention" type="number" value="${cfg.storage.retention_days}"></div>
+          <div class="form-group"><label>保留天数</label><input id="cfg-retention" type="number" min="1" max="365" value="${cfg.storage.retention_days}"><small>实时监控默认保留近 8 天，保存后立即清理过期样本。</small></div>
           <div class="form-group"><label>Flush 间隔(秒)</label><input id="cfg-flush" type="number" value="${cfg.storage.flush_interval_seconds}"></div>
           <div class="form-group"><label>Compaction 间隔(秒)</label><input id="cfg-compact" type="number" value="${cfg.storage.compaction_every_seconds}"></div>
           <div class="form-group"><label>采集间隔(秒)</label><input id="cfg-scrape-interval" type="number" value="${cfg.scrape.interval_seconds}"></div>
           <div class="form-group"><label>采集超时(秒)</label><input id="cfg-scrape-timeout" type="number" value="${cfg.scrape.timeout_seconds}"></div>
           <div class="form-group"><label>Agent 监听</label><input id="cfg-agent-listen" value="${escapeHtml(cfg.agent.listen_addr)}"></div>
+          <div class="form-group"><label>Agent Enrollment Token</label><input id="cfg-agent-enrollment" value="${escapeHtml(cfg.agent.enrollment_token || '')}"></div>
           <div class="form-group"><label>告警开关</label><select id="cfg-alert-enabled"><option value="true" ${cfg.alert.enabled ? 'selected' : ''}>开启</option><option value="false" ${!cfg.alert.enabled ? 'selected' : ''}>关闭</option></select></div>
         </div>
         <div class="form-group"><label>采集目标 JSON</label><textarea id="cfg-targets" class="code">${escapeHtml(JSON.stringify(cfg.scrape.targets || [], null, 2))}</textarea></div>
@@ -2130,12 +2131,15 @@ function renderConfigEditor() {
 }
 
 function normalizeConfig(cfg) {
-  if (cfg.storage) return cfg;
+  if (cfg.storage) {
+    cfg.agent = { listen_addr: '0.0.0.0:23391', enrollment_token: 'sentinel233-agent', labels: {}, ...(cfg.agent || {}) };
+    return cfg;
+  }
   return {
     server: { addr: cfg.Server?.Addr || '0.0.0.0', port: cfg.Server?.Port || 23390 },
     storage: {
       data_dir: cfg.Storage?.DataDir || './data',
-      retention_days: cfg.Storage?.RetentionDays || 15,
+      retention_days: cfg.Storage?.RetentionDays || 8,
       flush_interval_seconds: cfg.Storage?.FlushInterval || 10,
       max_open_files: cfg.Storage?.MaxOpenFiles || 1024,
       compaction_every_seconds: cfg.Storage?.CompactionEvery || 3600,
@@ -2146,7 +2150,7 @@ function normalizeConfig(cfg) {
       targets: cfg.Scrape?.Targets || [],
     },
     alert: { enabled: cfg.Alert?.Enabled ?? true, rules: cfg.Alert?.Rules || [] },
-    agent: { listen_addr: cfg.Agent?.ListenAddr || '0.0.0.0:23391', labels: cfg.Agent?.Labels || {} },
+    agent: { listen_addr: cfg.Agent?.ListenAddr || '0.0.0.0:23391', enrollment_token: cfg.Agent?.EnrollmentToken || 'sentinel233-agent', labels: cfg.Agent?.Labels || {} },
     i18n: { default: cfg.I18n?.Default || 'zh-CN', supported: cfg.I18n?.Supported || ['zh-CN', 'en-US', 'ja-JP'] },
   };
 }
@@ -2161,6 +2165,7 @@ function collectConfigFromForm() {
   cfg.scrape.timeout_seconds = Number(document.getElementById('cfg-scrape-timeout').value);
   cfg.scrape.targets = JSON.parse(document.getElementById('cfg-targets').value || '[]');
   cfg.agent.listen_addr = document.getElementById('cfg-agent-listen').value;
+  cfg.agent.enrollment_token = document.getElementById('cfg-agent-enrollment').value;
   cfg.alert.enabled = document.getElementById('cfg-alert-enabled').value === 'true';
   return cfg;
 }

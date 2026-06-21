@@ -10,7 +10,7 @@
 
 | 能力 | 说明 |
 |------|------|
-| **自研 TSDB** | WAL 崩溃恢复 + snapshot 快照恢复 + 内存热查询 + 自动数据保留清理 |
+| **自研 TSDB** | WAL 崩溃恢复 + snapshot 快照恢复 + 内存热查询 + 默认近 8 天保留 + GUI 热修改保留期 |
 | **完整 PromQL** | 瞬时/范围向量、二元运算、聚合(sum/avg/min/max/count/stddev/topk...)、30+ 内置函数(rate/increase/delta/abs/ceil/floor/round/sqrt/log...)、标签匹配(=, !=, =~, !~) |
 | **Prometheus 生态 API** | `/api/v1/query`、`/api/v1/query_range`、`/api/v1/series`、`/api/v1/labels`、`/api/v1/label/{name}/values`、`/api/v1/metadata`、`/api/v1/targets` |
 | **Scrape 采集** | 拉模式采集 + OpenMetrics 解析 + 动态目标管理 |
@@ -75,7 +75,7 @@ sentinel233-server -config sentinel233.yaml
 sentinel233-server -addr :8080 -data /var/lib/sentinel233
 
 # 启动 Agent（每台游戏服务器部署一个）
-sentinel233-agent -server http://your-server:23390
+sentinel233-agent -server http://your-server:23390 -enroll-token "$SENTINEL233_AGENT_ENROLL_TOKEN" -id game-01 -labels env=prod,role=game
 ```
 
 访问 `http://localhost:23390` 打开监控面板。
@@ -93,7 +93,7 @@ server:
 
 storage:
   data_dir: "./data"
-  retention_days: 15
+  retention_days: 8
 
 scrape:
   interval_seconds: 15
@@ -260,9 +260,11 @@ docker run -d -p 23390:23390 -p 23391:23391 -v sentinel233-data:/data sentinel23
 
 agent first 的正式控制面，用于 Linux node、MySQL 节点、游戏服务器等机器主动注册到 Sentinel233，由服务端统一审计、下发任务并接收运行状态。
 
+`/api/agent/v1/register` 默认要求 `enrollment_token`、`X-Sentinel-Agent-Token` 或 `?enrollment_token=` 与服务端 `agent.enrollment_token` 一致；生产环境请修改示例配置中的默认 token。
+
 | 端点 | 方法 | 说明 |
 |------|------|------|
-| `/api/agent/v1/register` | POST | agent 注册，返回后续心跳/任务使用的 agent token |
+| `/api/agent/v1/register` | POST | agent enrollment 注册，返回后续心跳/任务使用的 agent token |
 | `/api/agent/v1/heartbeat` | POST | agent 心跳、labels、runtime metrics 上报 |
 | `/api/agent/v1/tasks` | GET | agent 领取待执行任务 |
 | `/api/agent/v1/tasks/{id}/complete` | POST | agent 回传任务执行结果 |
@@ -387,10 +389,13 @@ sentinel233-server [flags]
 
 ```
 sentinel233-agent [flags]
-  -addr string      指标暴露地址 (默认 ":23391")
-  -server string    Sentinel233 服务端地址 (默认 "http://localhost:23390")
-  -interval int     推送间隔秒数 (默认 15)
-  -version          显示版本
+  -addr string          指标暴露地址 (默认 ":23391")
+  -server string        Sentinel233 服务端地址 (默认 "http://localhost:23390")
+  -id string            稳定 agent id；默认使用 hostname
+  -enroll-token string  agent enrollment token；也可用 SENTINEL233_AGENT_ENROLL_TOKEN
+  -labels string        逗号分隔 labels，例如 env=prod,role=mysql
+  -interval int         推送间隔秒数 (默认 15)
+  -version              显示版本
 ```
 
 ## 文档
