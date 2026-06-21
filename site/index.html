@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Sentinel233: first-class Prometheus ingestion, Grafana dashboard integration, exporter catalog, native dashboards, alerting, and Docker verified operations.">
+  <meta name="description" content="Sentinel233: one operations server for Prometheus storage, Grafana ecosystem dashboards, agent-first automation, alerting, and Docker verified operations.">
   <title>Sentinel233 Docs</title>
   <style>
     :root {
@@ -402,7 +402,7 @@
     <div class="hero-content">
       <div class="eyebrow">Grafana ecosystem, Prometheus native</div>
       <h1>Sentinel233</h1>
-      <p class="hero-copy">一套服务承接采集、存储、PromQL、Dashboard、告警、主流 exporter 目录、生态格式导入与 Docker 验证，让 Grafana + Prometheus 组件链路收束到一个可运维控制面。</p>
+      <p class="hero-copy">一套服务承接采集、存储、PromQL、Dashboard、告警、agent 控制面、主流 exporter 目录、生态格式导入与 Docker 验证，让 Grafana + Prometheus 组件链路收束到一个中小团队也能维护的一体化运维服务器。</p>
       <div class="hero-actions">
         <a class="button primary" href="#docker">运行全链路验证</a>
         <a class="button" href="#migration">查看接入路径</a>
@@ -412,7 +412,7 @@
         <div class="proof-item"><strong>/api/v1/*</strong><span>Prometheus HTTP API</span></div>
         <div class="proof-item"><strong>remote_write</strong><span>Snappy protobuf ingestion</span></div>
         <div class="proof-item"><strong>Grafana JSON</strong><span>Dashboard import/export</span></div>
-        <div class="proof-item"><strong>Exporter catalog</strong><span>Infra, DB, queue, cloud native</span></div>
+        <div class="proof-item"><strong>Agent first</strong><span>Register, heartbeat, tasks</span></div>
       </div>
     </div>
   </div>
@@ -426,6 +426,7 @@
       <div class="matrix">
         <div class="matrix-row"><strong>Prometheus 查询层</strong><p>支持 query、query_range、series、labels、label values、metadata、targets、rules、alerts、status/tsdb 等 Grafana 常用探测端点。</p><span class="status">Ready</span></div>
         <div class="matrix-row"><strong>写入与采集层</strong><p>接入 Prometheus remote_write、OpenMetrics scrape、Sentinel native JSON ingestion。</p><span class="status">Ready</span></div>
+        <div class="matrix-row"><strong>Agent 控制面</strong><p>agent 注册、心跳、runtime metrics、任务领取与回执，适合 Linux node、MySQL 节点和游戏服务器由一个 Sentinel233 Server 统一驱动。</p><span class="status">Ready</span></div>
         <div class="matrix-row"><strong>Exporter 接入目录</strong><p>内置 Go/JVM、Linux/Windows、MySQL、PostgreSQL、Redis、Elasticsearch、MongoDB、Kafka、RabbitMQ、Nginx、HAProxy、Docker/cAdvisor、Kubernetes、etcd、MinIO、SNMP、Blackbox、OpenTelemetry Collector 等预设和 Dashboard。</p><span class="status">Ready</span></div>
         <div class="matrix-row"><strong>Grafana Dashboard</strong><p>导入 panels、targets、gridPos、fieldConfig、templating、datasource；导出保留多 target。</p><span class="status">Ready</span></div>
         <div class="matrix-row"><strong>Grafana datasource provisioning</strong><p>导入 datasource YAML/JSON，Prometheus datasource 自动映射到 Sentinel `/api/v1`。</p><span class="status">Ready</span></div>

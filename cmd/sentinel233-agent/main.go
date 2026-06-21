@@ -1,8 +1,11 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -18,6 +21,8 @@ import (
 var (
 	listenAddr string
 	serverURL  string
+	agentID    string
+	labelsText string
 	interval   int
 	showVer    bool
 )
@@ -25,6 +30,8 @@ var (
 func main() {
 	flag.StringVar(&listenAddr, "addr", ":23391", "agent metrics listen address")
 	flag.StringVar(&serverURL, "server", "http://localhost:23390", "sentinel233 server URL")
+	flag.StringVar(&agentID, "id", "", "stable agent id; defaults to hostname")
+	flag.StringVar(&labelsText, "labels", "", "comma-separated labels, for example env=prod,role=mysql")
 	flag.IntVar(&interval, "interval", 15, "push interval in seconds")
 	flag.BoolVar(&showVer, "version", false, "show version")
 	flag.Parse()
@@ -36,6 +43,14 @@ func main() {
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	logger.Info("starting sentinel233-agent", "addr", listenAddr, "server", serverURL)
+	hostname, _ := os.Hostname()
+	if strings.TrimSpace(agentID) == "" {
+		agentID = hostname
+	}
+	labels := parseLabels(labelsText)
+	if hostname != "" && labels["hostname"] == "" {
+		labels["hostname"] = hostname
+	}
 
 	http.HandleFunc("/metrics", handleMetrics)
 	http.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok")) })
@@ -47,6 +62,8 @@ func main() {
 			os.Exit(1)
 		}
 	}()
+
+	go runControlPlane(logger, serverURL, agentID, hostname, listenAddr, labels, time.Duration(interval)*time.Second)
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
@@ -103,4 +120,153 @@ func handleMetrics(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 	w.Write([]byte(sb.String()))
+}
+
+func runControlPlane(logger *slog.Logger, server, id, hostname, listen string, labels map[string]string, every time.Duration) {
+	if every <= 0 {
+		every = 15 * time.Second
+	}
+	client := &http.Client{Timeout: 10 * time.Second}
+	token := ""
+	for {
+		if token == "" {
+			nextToken, err := registerAgent(client, server, id, hostname, listen, labels)
+			if err != nil {
+				logger.Warn("agent registration failed", "err", err)
+				time.Sleep(every)
+				continue
+			}
+			token = nextToken
+			logger.Info("agent registered", "id", id)
+		}
+		if err := heartbeatAgent(client, server, token, listen, labels); err != nil {
+			logger.Warn("agent heartbeat failed", "err", err)
+			token = ""
+			time.Sleep(every)
+			continue
+		}
+		if err := processTasks(client, server, token, logger); err != nil {
+			logger.Warn("agent task poll failed", "err", err)
+		}
+		time.Sleep(every)
+	}
+}
+
+func registerAgent(client *http.Client, server, id, hostname, listen string, labels map[string]string) (string, error) {
+	body := map[string]interface{}{
+		"agent_id":    id,
+		"name":        id,
+		"hostname":    hostname,
+		"version":     version.Version,
+		"listen_addr": listen,
+		"labels":      labels,
+	}
+	var resp struct {
+		Data struct {
+			Token string `json:"token"`
+		} `json:"data"`
+		Error string `json:"error"`
+	}
+	if err := postJSON(client, server+"/api/agent/v1/register", "", body, &resp); err != nil {
+		return "", err
+	}
+	if resp.Data.Token == "" {
+		return "", fmt.Errorf("registration response did not include token")
+	}
+	return resp.Data.Token, nil
+}
+
+func heartbeatAgent(client *http.Client, server, token, listen string, labels map[string]string) error {
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	body := map[string]interface{}{
+		"version":     version.Version,
+		"listen_addr": listen,
+		"labels":      labels,
+		"metrics": map[string]float64{
+			"sentinel_agent_up":                     1,
+			"sentinel_agent_goroutines":             float64(runtime.NumGoroutine()),
+			"sentinel_agent_heap_alloc_bytes":       float64(m.HeapAlloc),
+			"sentinel_agent_process_uptime_seconds": time.Since(startTime).Seconds(),
+		},
+	}
+	return postJSON(client, server+"/api/agent/v1/heartbeat", token, body, nil)
+}
+
+func processTasks(client *http.Client, server, token string, logger *slog.Logger) error {
+	req, err := http.NewRequest(http.MethodGet, server+"/api/agent/v1/tasks", nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		return fmt.Errorf("tasks status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	var envelope struct {
+		Data []struct {
+			ID      int64  `json:"id"`
+			Type    string `json:"type"`
+			Payload string `json:"payload"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+		return err
+	}
+	for _, task := range envelope.Data {
+		logger.Info("agent task claimed", "id", task.ID, "type", task.Type)
+		result := fmt.Sprintf("acknowledged task %s", task.Type)
+		if err := postJSON(client, fmt.Sprintf("%s/api/agent/v1/tasks/%d/complete", server, task.ID), token, map[string]string{"result": result}, nil); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func postJSON(client *http.Client, url, token string, payload interface{}, out interface{}) error {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(data))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	if out != nil && len(body) > 0 {
+		return json.Unmarshal(body, out)
+	}
+	return nil
+}
+
+func parseLabels(text string) map[string]string {
+	labels := make(map[string]string)
+	for _, part := range strings.Split(text, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		pair := strings.SplitN(part, "=", 2)
+		if len(pair) == 2 && strings.TrimSpace(pair[0]) != "" {
+			labels[strings.TrimSpace(pair[0])] = strings.TrimSpace(pair[1])
+		}
+	}
+	return labels
 }

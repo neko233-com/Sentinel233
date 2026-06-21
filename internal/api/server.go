@@ -2,7 +2,9 @@ package api
 
 import (
 	"context"
+	"crypto/rand"
 	"embed"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io/fs"
@@ -109,6 +111,15 @@ func (s *Server) Router() chi.Router {
 	r.Get("/api/sentinel/v1/capabilities", s.handleSentinelCapabilities)
 	r.Post("/api/sentinel/v1/write", s.handleSentinelWrite)
 
+	// Agent-first control plane. Agents register once, then use their issued token for heartbeat and tasks.
+	r.Post("/api/agent/v1/register", s.handleAgentRegister)
+	r.Route("/api/agent/v1", func(r chi.Router) {
+		r.Use(s.agentMiddleware)
+		r.Post("/heartbeat", s.handleAgentHeartbeat)
+		r.Get("/tasks", s.handleAgentTasks)
+		r.Post("/tasks/{id}/complete", s.handleAgentTaskComplete)
+	})
+
 	// Loopback-only local agent API for zero-touch dashboard automation.
 	r.Route("/api/local/v1", func(r chi.Router) {
 		r.Use(s.localAgentMiddleware)
@@ -158,6 +169,12 @@ func (s *Server) Router() chi.Router {
 		r.Get("/", s.handleGetTargets)
 		r.Post("/", s.requireRole("operator", s.handleAddTarget))
 		r.Delete("/{id}", s.requireRole("operator", s.handleRemoveTarget))
+	})
+
+	r.Route("/api/agents", func(r chi.Router) {
+		r.Use(s.tenantMiddleware)
+		r.Get("/", s.requireRole("viewer", s.handleListAgents))
+		r.Post("/{agentID}/tasks", s.requireRole("operator", s.handleCreateAgentTask))
 	})
 
 	// Alert rules API (tenant-scoped)
@@ -293,11 +310,36 @@ func (s *Server) localAgentMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+func (s *Server) agentMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		token := extractToken(r)
+		if token == "" {
+			s.jsonError(w, "agent token required", http.StatusUnauthorized)
+			return
+		}
+		agent, err := s.store.GetAgentByToken(token)
+		if err != nil {
+			s.jsonError(w, "invalid agent token", http.StatusUnauthorized)
+			return
+		}
+		ctx := context.WithValue(r.Context(), tenantIDKey, agent.TenantID)
+		ctx = context.WithValue(ctx, contextKey("agent_id"), agent.AgentID)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
 func (s *Server) getTenantID(r *http.Request) int64 {
 	if v, ok := r.Context().Value(tenantIDKey).(int64); ok && v > 0 {
 		return v
 	}
 	return 1
+}
+
+func getAgentID(r *http.Request) string {
+	if v, ok := r.Context().Value(contextKey("agent_id")).(string); ok {
+		return v
+	}
+	return ""
 }
 
 func extractToken(r *http.Request) string {
@@ -360,6 +402,174 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		"role":     role,
 		"username": req.Username,
 	})
+}
+
+func (s *Server) handleAgentRegister(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		TenantID   int64             `json:"tenant_id"`
+		AgentID    string            `json:"agent_id"`
+		Name       string            `json:"name"`
+		Hostname   string            `json:"hostname"`
+		Version    string            `json:"version"`
+		ListenAddr string            `json:"listen_addr"`
+		Labels     map[string]string `json:"labels"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.jsonError(w, "invalid agent registration payload", http.StatusBadRequest)
+		return
+	}
+	tenantID := req.TenantID
+	if tenantID <= 0 {
+		tenantID = 1
+	}
+	agentID := strings.TrimSpace(req.AgentID)
+	if agentID == "" {
+		agentID = firstNonEmptyString(req.Hostname, req.Name)
+	}
+	if agentID == "" {
+		s.jsonError(w, "agent_id or hostname is required", http.StatusBadRequest)
+		return
+	}
+	token, err := randomToken("agt_")
+	if err != nil {
+		s.jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	agent := &store.Agent{
+		TenantID:   tenantID,
+		AgentID:    agentID,
+		Name:       firstNonEmptyString(req.Name, agentID),
+		Hostname:   req.Hostname,
+		Version:    req.Version,
+		ListenAddr: req.ListenAddr,
+		Token:      token,
+		Labels:     req.Labels,
+		Status:     "online",
+	}
+	if err := s.store.UpsertAgent(agent); err != nil {
+		s.jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.jsonOK(w, map[string]interface{}{"status": "success", "data": map[string]interface{}{
+		"agent": agent,
+		"token": token,
+		"endpoints": map[string]string{
+			"heartbeat": "/api/agent/v1/heartbeat",
+			"tasks":     "/api/agent/v1/tasks",
+			"write":     "/api/sentinel/v1/write",
+		},
+	}})
+}
+
+func (s *Server) handleAgentHeartbeat(w http.ResponseWriter, r *http.Request) {
+	tenantID := s.getTenantID(r)
+	agentID := getAgentID(r)
+	var req struct {
+		Version    string             `json:"version"`
+		ListenAddr string             `json:"listen_addr"`
+		Labels     map[string]string  `json:"labels"`
+		Metrics    map[string]float64 `json:"metrics"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	if req.Labels == nil {
+		req.Labels = map[string]string{}
+	}
+	if err := s.store.TouchAgent(tenantID, agentID, req.Version, req.ListenAddr, req.Labels); err != nil {
+		s.jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	for name, value := range req.Metrics {
+		labels := map[string]string{"agent_id": agentID, "source": "sentinel_agent"}
+		if err := s.db.Append(labelsMapToTSDB(metricLabels(name, labels)), time.Now().UnixMilli(), value); err != nil {
+			s.jsonError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+	s.jsonOK(w, map[string]interface{}{"status": "success", "data": map[string]interface{}{"agentId": agentID}})
+}
+
+func (s *Server) handleAgentTasks(w http.ResponseWriter, r *http.Request) {
+	tenantID := s.getTenantID(r)
+	agentID := getAgentID(r)
+	limit := intFromParam(r.URL.Query().Get("limit"), 10)
+	tasks, err := s.store.ClaimAgentTasks(tenantID, agentID, limit)
+	if err != nil {
+		s.jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.jsonOK(w, map[string]interface{}{"status": "success", "data": tasks})
+}
+
+func (s *Server) handleAgentTaskComplete(w http.ResponseWriter, r *http.Request) {
+	tenantID := s.getTenantID(r)
+	agentID := getAgentID(r)
+	taskID, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	var req struct {
+		Result string `json:"result"`
+		Error  string `json:"error"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.jsonError(w, "invalid task completion payload", http.StatusBadRequest)
+		return
+	}
+	if err := s.store.CompleteAgentTask(tenantID, agentID, taskID, req.Result, req.Error); err != nil {
+		s.jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.jsonOK(w, map[string]interface{}{"status": "success"})
+}
+
+func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
+	agents, err := s.store.ListAgents(s.getTenantID(r))
+	if err != nil {
+		s.jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.jsonOK(w, map[string]interface{}{"status": "success", "data": agents})
+}
+
+func (s *Server) handleCreateAgentTask(w http.ResponseWriter, r *http.Request) {
+	tenantID := s.getTenantID(r)
+	agentID := chi.URLParam(r, "agentID")
+	var req struct {
+		Type    string          `json:"type"`
+		Payload json.RawMessage `json:"payload"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.jsonError(w, "invalid task payload", http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(req.Type) == "" {
+		s.jsonError(w, "task type is required", http.StatusBadRequest)
+		return
+	}
+	payload := strings.TrimSpace(string(req.Payload))
+	if payload == "" {
+		payload = "{}"
+	}
+	task := &store.AgentTask{TenantID: tenantID, AgentID: agentID, Type: req.Type, Payload: payload}
+	if err := s.store.CreateAgentTask(task); err != nil {
+		s.jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.jsonOK(w, map[string]interface{}{"status": "success", "data": task})
+}
+
+func randomToken(prefix string) (string, error) {
+	var buf [24]byte
+	if _, err := rand.Read(buf[:]); err != nil {
+		return "", err
+	}
+	return prefix + hex.EncodeToString(buf[:]), nil
+}
+
+func metricLabels(metric string, labels map[string]string) map[string]string {
+	out := make(map[string]string, len(labels)+1)
+	for k, v := range labels {
+		out[k] = v
+	}
+	out["__name__"] = metric
+	return out
 }
 
 // ============ Tenant handlers ============

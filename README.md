@@ -10,7 +10,7 @@
 
 | 能力 | 说明 |
 |------|------|
-| **自研 TSDB** | WAL 崩溃恢复 + 内存存储 + 自动数据保留清理 |
+| **自研 TSDB** | WAL 崩溃恢复 + snapshot 快照恢复 + 内存热查询 + 自动数据保留清理 |
 | **完整 PromQL** | 瞬时/范围向量、二元运算、聚合(sum/avg/min/max/count/stddev/topk...)、30+ 内置函数(rate/increase/delta/abs/ceil/floor/round/sqrt/log...)、标签匹配(=, !=, =~, !~) |
 | **Prometheus 生态 API** | `/api/v1/query`、`/api/v1/query_range`、`/api/v1/series`、`/api/v1/labels`、`/api/v1/label/{name}/values`、`/api/v1/metadata`、`/api/v1/targets` |
 | **Scrape 采集** | 拉模式采集 + OpenMetrics 解析 + 动态目标管理 |
@@ -23,7 +23,7 @@
 | **可视化运行时** | Chart.js + ECharts 双渲染器，支持更贴近 Grafana 的图表效果 |
 | **数据变换** | 面板支持 `PromQL` 直出或 `PromQL + SQL` 变换，用于 ECharts 绘制与聚合透视 |
 | **i18n 国际化** | 中文 / English / 日本語，默认支持 3 语言 |
-| **轻量 Agent** | 内置 Go runtime 指标采集 (CPU/内存/goroutine)，一键部署 |
+| **Agent first 控制面** | agent 注册、心跳、runtime 指标上报、任务领取与结果回执，一键部署后由服务端驱动运维 |
 | **SQLite 元数据** | Dashboard、用户、设置持久化，纯 Go 无 CGO 依赖 |
 | **多租户** | 租户隔离 (Dashboard/用户/告警规则/采集目标)，RBAC (viewer/operator/admin)，默认租户 default |
 
@@ -255,6 +255,19 @@ docker run -d -p 23390:23390 -p 23391:23391 -v sentinel233-data:/data sentinel23
 | `/api/ecosystem/import?source=grafana-datasources` | POST | 导入 Grafana datasource provisioning，保存 Prometheus datasource 映射 |
 | `/api/ecosystem/import?source=grafana-dashboard` | POST | 导入 Grafana dashboard JSON |
 | `/api/ecosystem/alertmanager/webhook` | POST | 接收 Alertmanager webhook payload 并保留最近一次 payload |
+
+### Agent Control Plane API
+
+agent first 的正式控制面，用于 Linux node、MySQL 节点、游戏服务器等机器主动注册到 Sentinel233，由服务端统一审计、下发任务并接收运行状态。
+
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/api/agent/v1/register` | POST | agent 注册，返回后续心跳/任务使用的 agent token |
+| `/api/agent/v1/heartbeat` | POST | agent 心跳、labels、runtime metrics 上报 |
+| `/api/agent/v1/tasks` | GET | agent 领取待执行任务 |
+| `/api/agent/v1/tasks/{id}/complete` | POST | agent 回传任务执行结果 |
+| `/api/agents` | GET | 管理端查看 agent 列表 |
+| `/api/agents/{agentID}/tasks` | POST | 管理端向指定 agent 下发任务 |
 
 ### Local Agent API
 

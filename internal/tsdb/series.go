@@ -41,7 +41,11 @@ func (l Labels) String() string {
 
 func (l Labels) Hash() uint64 {
 	h := fnv.New64a()
-	for _, lb := range l {
+	labels := append(Labels(nil), l...)
+	sort.Slice(labels, func(i, j int) bool {
+		return labels[i].Name < labels[j].Name
+	})
+	for _, lb := range labels {
 		h.Write([]byte(lb.Name))
 		h.Write([]byte{0})
 		h.Write([]byte(lb.Value))
@@ -143,6 +147,14 @@ func OpenDB(cfg DBConfig) (*DB, error) {
 }
 
 func (db *DB) replayWAL() error {
+	snapshotEntries, err := db.wal.ReadSnapshot()
+	if err != nil {
+		return err
+	}
+	for _, e := range snapshotEntries {
+		s := db.getOrCreateSeries(e.Labels)
+		s.Append(e.Timestamp, e.Value)
+	}
 	entries, err := db.wal.ReadAll()
 	if err != nil {
 		return err
@@ -248,9 +260,34 @@ func (db *DB) compact() {
 	for _, s := range series {
 		s.TrimBefore(cutoff)
 	}
+	entries := db.snapshotEntries()
+	if err := db.wal.WriteSnapshot(entries); err != nil {
+		return
+	}
 	if err := db.wal.Truncate(); err != nil {
 		_ = err
 	}
+}
+
+func (db *DB) snapshotEntries() []WALEntry {
+	db.mu.RLock()
+	series := make([]*Series, 0, len(db.series))
+	for _, s := range db.series {
+		series = append(series, s)
+	}
+	db.mu.RUnlock()
+
+	var entries []WALEntry
+	for _, s := range series {
+		for _, sample := range s.Samples() {
+			entries = append(entries, WALEntry{
+				Labels:    s.Labels,
+				Timestamp: sample.Timestamp,
+				Value:     sample.Value,
+			})
+		}
+	}
+	return entries
 }
 
 func (db *DB) Close() error {

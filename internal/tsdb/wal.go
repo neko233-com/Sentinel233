@@ -89,8 +89,48 @@ func (w *WAL) ReadAll() ([]WALEntry, error) {
 		return nil, err
 	}
 
-	walFile := filepath.Join(w.dir, "wal.dat")
-	f, err := os.Open(walFile)
+	return readEntriesFile(filepath.Join(w.dir, "wal.dat"))
+}
+
+func (w *WAL) ReadSnapshot() ([]WALEntry, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return readEntriesFile(filepath.Join(w.dir, "snapshot.dat"))
+}
+
+func (w *WAL) WriteSnapshot(entries []WALEntry) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	tmpFile := filepath.Join(w.dir, "snapshot.dat.tmp")
+	snapshotFile := filepath.Join(w.dir, "snapshot.dat")
+	f, err := os.OpenFile(tmpFile, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644)
+	if err != nil {
+		return err
+	}
+	writer := bufio.NewWriter(f)
+	for _, entry := range entries {
+		if err := writeEntry(writer, entry); err != nil {
+			f.Close()
+			return err
+		}
+	}
+	if err := writer.Flush(); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpFile, snapshotFile)
+}
+
+func readEntriesFile(path string) ([]WALEntry, error) {
+	f, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
@@ -134,6 +174,30 @@ func (w *WAL) ReadAll() ([]WALEntry, error) {
 		})
 	}
 	return entries, nil
+}
+
+func writeEntry(writer *bufio.Writer, entry WALEntry) error {
+	labelsStr := labelsToString(entry.Labels)
+
+	var buf [binary.MaxVarintLen64]byte
+	n := binary.PutVarint(buf[:], int64(len(labelsStr)))
+	if _, err := writer.Write(buf[:n]); err != nil {
+		return err
+	}
+	if _, err := writer.WriteString(labelsStr); err != nil {
+		return err
+	}
+	n = binary.PutVarint(buf[:], entry.Timestamp)
+	if _, err := writer.Write(buf[:n]); err != nil {
+		return err
+	}
+	bits := math.Float64bits(entry.Value)
+	binary.LittleEndian.PutUint16(buf[:2], uint16(bits>>48))
+	binary.LittleEndian.PutUint16(buf[2:4], uint16(bits>>32))
+	binary.LittleEndian.PutUint16(buf[4:6], uint16(bits>>16))
+	binary.LittleEndian.PutUint16(buf[6:8], uint16(bits))
+	_, err := writer.Write(buf[:8])
+	return err
 }
 
 func (w *WAL) Truncate() error {

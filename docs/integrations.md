@@ -1,6 +1,6 @@
 # Sentinel233 Server integrations
 
-Sentinel233 Server treats Prometheus/OpenMetrics `/metrics` scraping as one ingestion path, not the only path.
+Sentinel233 Server is designed as a single operations server for small and medium teams: it stores metrics, renders dashboards, evaluates alerts, and coordinates agents from one control plane. Prometheus/OpenMetrics `/metrics` scraping is one ingestion path, not the only path.
 
 ## Supported ingestion presets
 
@@ -34,6 +34,19 @@ POST /api/v1/write
 ```
 
 The endpoint accepts the standard Prometheus remote write protobuf `WriteRequest` with snappy block compression. Sentinel233 preserves the original labels and stores the samples in the same TSDB used by scraped `/metrics` targets and native Sentinel clients.
+
+## Agent first control plane
+
+Machines can run `sentinel233-agent` to register with the server, send heartbeat/runtime metrics, poll assigned tasks, and report task results. This makes the server the operational control plane instead of only a passive metrics store.
+
+| Endpoint | Purpose |
+|---|---|
+| `POST /api/agent/v1/register` | Register an agent and receive an agent token. |
+| `POST /api/agent/v1/heartbeat` | Send labels, runtime metrics, version, and liveness. |
+| `GET /api/agent/v1/tasks` | Claim pending tasks assigned by the server. |
+| `POST /api/agent/v1/tasks/{id}/complete` | Report task completion or failure. |
+| `GET /api/agents` | Operator view of registered agents. |
+| `POST /api/agents/{agentID}/tasks` | Assign a task to a specific agent. |
 
 Example Prometheus configuration:
 

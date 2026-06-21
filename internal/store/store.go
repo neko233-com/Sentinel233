@@ -16,15 +16,15 @@ type Store struct {
 }
 
 type Tenant struct {
-	ID          int64     `json:"id"`
-	Slug        string    `json:"slug"`
-	Name        string    `json:"name"`
-	Description string    `json:"description"`
-	MaxSeries   int       `json:"max_series"`
-	MaxRetention int      `json:"max_retention_days"`
-	Enabled     bool      `json:"enabled"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ID           int64     `json:"id"`
+	Slug         string    `json:"slug"`
+	Name         string    `json:"name"`
+	Description  string    `json:"description"`
+	MaxSeries    int       `json:"max_series"`
+	MaxRetention int       `json:"max_retention_days"`
+	Enabled      bool      `json:"enabled"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 type Dashboard struct {
@@ -50,14 +50,14 @@ type User struct {
 }
 
 type AlertRule struct {
-	ID         int64  `json:"id"`
-	TenantID   int64  `json:"tenant_id"`
-	Name       string `json:"name"`
-	Expr       string `json:"expr"`
-	Duration   string `json:"duration"`
-	Severity   string `json:"severity"`
-	NotifyURL  string `json:"notify_url"`
-	Enabled    bool   `json:"enabled"`
+	ID        int64  `json:"id"`
+	TenantID  int64  `json:"tenant_id"`
+	Name      string `json:"name"`
+	Expr      string `json:"expr"`
+	Duration  string `json:"duration"`
+	Severity  string `json:"severity"`
+	NotifyURL string `json:"notify_url"`
+	Enabled   bool   `json:"enabled"`
 }
 
 type ScrapeTarget struct {
@@ -67,6 +67,36 @@ type ScrapeTarget struct {
 	Endpoint string            `json:"endpoint"`
 	Labels   map[string]string `json:"labels"`
 	Enabled  bool              `json:"enabled"`
+}
+
+type Agent struct {
+	ID           int64             `json:"id"`
+	TenantID     int64             `json:"tenant_id"`
+	AgentID      string            `json:"agent_id"`
+	Name         string            `json:"name"`
+	Hostname     string            `json:"hostname"`
+	Version      string            `json:"version"`
+	ListenAddr   string            `json:"listen_addr"`
+	Token        string            `json:"-"`
+	Labels       map[string]string `json:"labels"`
+	Status       string            `json:"status"`
+	LastSeenAt   time.Time         `json:"last_seen_at"`
+	RegisteredAt time.Time         `json:"registered_at"`
+	UpdatedAt    time.Time         `json:"updated_at"`
+}
+
+type AgentTask struct {
+	ID          int64     `json:"id"`
+	TenantID    int64     `json:"tenant_id"`
+	AgentID     string    `json:"agent_id"`
+	Type        string    `json:"type"`
+	Payload     string    `json:"payload"`
+	Status      string    `json:"status"`
+	Result      string    `json:"result"`
+	Error       string    `json:"error"`
+	CreatedAt   time.Time `json:"created_at"`
+	ClaimedAt   time.Time `json:"claimed_at"`
+	CompletedAt time.Time `json:"completed_at"`
 }
 
 func Open(dataDir string) (*Store, error) {
@@ -171,11 +201,46 @@ func (s *Store) migrate() error {
 			PRIMARY KEY (tenant_id, key)
 		);
 
+		CREATE TABLE IF NOT EXISTS agents (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			tenant_id INTEGER NOT NULL DEFAULT 1,
+			agent_id TEXT NOT NULL,
+			name TEXT NOT NULL,
+			hostname TEXT DEFAULT '',
+			version TEXT DEFAULT '',
+			listen_addr TEXT DEFAULT '',
+			token TEXT NOT NULL,
+			labels TEXT DEFAULT '{}',
+			status TEXT DEFAULT 'online',
+			last_seen_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			registered_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE(tenant_id, agent_id),
+			FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE
+		);
+
+		CREATE TABLE IF NOT EXISTS agent_tasks (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			tenant_id INTEGER NOT NULL DEFAULT 1,
+			agent_id TEXT NOT NULL DEFAULT '',
+			type TEXT NOT NULL,
+			payload TEXT DEFAULT '{}',
+			status TEXT DEFAULT 'pending',
+			result TEXT DEFAULT '',
+			error TEXT DEFAULT '',
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			claimed_at DATETIME,
+			completed_at DATETIME,
+			FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE
+		);
+
 		CREATE INDEX IF NOT EXISTS idx_dashboards_tenant ON dashboards(tenant_id);
 		CREATE INDEX IF NOT EXISTS idx_users_tenant ON users(tenant_id);
 		CREATE INDEX IF NOT EXISTS idx_alert_rules_tenant ON alert_rules(tenant_id);
 		CREATE INDEX IF NOT EXISTS idx_scrape_targets_tenant ON scrape_targets(tenant_id);
 		CREATE INDEX IF NOT EXISTS idx_settings_tenant ON settings(tenant_id);
+		CREATE INDEX IF NOT EXISTS idx_agents_tenant ON agents(tenant_id);
+		CREATE INDEX IF NOT EXISTS idx_agent_tasks_agent ON agent_tasks(tenant_id, agent_id, status);
 	`)
 	return err
 }
@@ -460,6 +525,176 @@ func (s *Store) DeleteScrapeTarget(tenantID, id int64) error {
 	return err
 }
 
+// ============ Agents (tenant-scoped) ============
+
+func (s *Store) UpsertAgent(a *Agent) error {
+	if a.Labels == nil {
+		a.Labels = map[string]string{}
+	}
+	if a.Status == "" {
+		a.Status = "online"
+	}
+	_, err := s.db.Exec(`
+		INSERT INTO agents (tenant_id, agent_id, name, hostname, version, listen_addr, token, labels, status, last_seen_at, registered_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+		ON CONFLICT(tenant_id, agent_id) DO UPDATE SET
+			name=excluded.name,
+			hostname=excluded.hostname,
+			version=excluded.version,
+			listen_addr=excluded.listen_addr,
+			token=excluded.token,
+			labels=excluded.labels,
+			status='online',
+			last_seen_at=CURRENT_TIMESTAMP,
+			updated_at=CURRENT_TIMESTAMP
+	`, a.TenantID, a.AgentID, a.Name, a.Hostname, a.Version, a.ListenAddr, a.Token, marshalLabels(a.Labels), a.Status)
+	if err != nil {
+		return err
+	}
+	stored, err := s.GetAgent(a.TenantID, a.AgentID)
+	if err != nil {
+		return err
+	}
+	*a = *stored
+	return nil
+}
+
+func (s *Store) GetAgent(tenantID int64, agentID string) (*Agent, error) {
+	a := &Agent{}
+	var labelsJSON string
+	err := s.db.QueryRow(`
+		SELECT id, tenant_id, agent_id, name, hostname, version, listen_addr, token, labels, status, last_seen_at, registered_at, updated_at
+		FROM agents WHERE tenant_id=? AND agent_id=?
+	`, tenantID, agentID).Scan(&a.ID, &a.TenantID, &a.AgentID, &a.Name, &a.Hostname, &a.Version, &a.ListenAddr, &a.Token, &labelsJSON, &a.Status, &a.LastSeenAt, &a.RegisteredAt, &a.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	a.Labels = unmarshalLabels(labelsJSON)
+	return a, nil
+}
+
+func (s *Store) GetAgentByToken(token string) (*Agent, error) {
+	a := &Agent{}
+	var labelsJSON string
+	err := s.db.QueryRow(`
+		SELECT id, tenant_id, agent_id, name, hostname, version, listen_addr, token, labels, status, last_seen_at, registered_at, updated_at
+		FROM agents WHERE token=?
+	`, token).Scan(&a.ID, &a.TenantID, &a.AgentID, &a.Name, &a.Hostname, &a.Version, &a.ListenAddr, &a.Token, &labelsJSON, &a.Status, &a.LastSeenAt, &a.RegisteredAt, &a.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	a.Labels = unmarshalLabels(labelsJSON)
+	return a, nil
+}
+
+func (s *Store) ListAgents(tenantID int64) ([]Agent, error) {
+	rows, err := s.db.Query(`
+		SELECT id, tenant_id, agent_id, name, hostname, version, listen_addr, token, labels, status, last_seen_at, registered_at, updated_at
+		FROM agents WHERE tenant_id=? ORDER BY last_seen_at DESC
+	`, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []Agent
+	for rows.Next() {
+		var a Agent
+		var labelsJSON string
+		if err := rows.Scan(&a.ID, &a.TenantID, &a.AgentID, &a.Name, &a.Hostname, &a.Version, &a.ListenAddr, &a.Token, &labelsJSON, &a.Status, &a.LastSeenAt, &a.RegisteredAt, &a.UpdatedAt); err != nil {
+			return nil, err
+		}
+		a.Labels = unmarshalLabels(labelsJSON)
+		result = append(result, a)
+	}
+	return result, nil
+}
+
+func (s *Store) TouchAgent(tenantID int64, agentID, version, listenAddr string, labels map[string]string) error {
+	labelsJSON := marshalLabels(labels)
+	_, err := s.db.Exec(`
+		UPDATE agents SET version=?, listen_addr=?, labels=?, status='online', last_seen_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP
+		WHERE tenant_id=? AND agent_id=?
+	`, version, listenAddr, labelsJSON, tenantID, agentID)
+	return err
+}
+
+func (s *Store) CreateAgentTask(t *AgentTask) error {
+	if t.Status == "" {
+		t.Status = "pending"
+	}
+	res, err := s.db.Exec(`
+		INSERT INTO agent_tasks (tenant_id, agent_id, type, payload, status)
+		VALUES (?, ?, ?, ?, ?)
+	`, t.TenantID, t.AgentID, t.Type, t.Payload, t.Status)
+	if err != nil {
+		return err
+	}
+	t.ID, _ = res.LastInsertId()
+	return nil
+}
+
+func (s *Store) ClaimAgentTasks(tenantID int64, agentID string, limit int) ([]AgentTask, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	rows, err := tx.Query(`
+		SELECT id, tenant_id, agent_id, type, payload, status, result, error, created_at, claimed_at, completed_at
+		FROM agent_tasks
+		WHERE tenant_id=? AND status='pending' AND (agent_id='' OR agent_id=?)
+		ORDER BY id LIMIT ?
+	`, tenantID, agentID, limit)
+	if err != nil {
+		return nil, err
+	}
+	var tasks []AgentTask
+	for rows.Next() {
+		var task AgentTask
+		var claimedAt, completedAt sql.NullTime
+		if err := rows.Scan(&task.ID, &task.TenantID, &task.AgentID, &task.Type, &task.Payload, &task.Status, &task.Result, &task.Error, &task.CreatedAt, &claimedAt, &completedAt); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		if claimedAt.Valid {
+			task.ClaimedAt = claimedAt.Time
+		}
+		if completedAt.Valid {
+			task.CompletedAt = completedAt.Time
+		}
+		tasks = append(tasks, task)
+	}
+	rows.Close()
+	for _, task := range tasks {
+		if _, err := tx.Exec("UPDATE agent_tasks SET status='claimed', agent_id=?, claimed_at=CURRENT_TIMESTAMP WHERE id=? AND status='pending'", agentID, task.ID); err != nil {
+			return nil, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	for i := range tasks {
+		tasks[i].AgentID = agentID
+		tasks[i].Status = "claimed"
+	}
+	return tasks, nil
+}
+
+func (s *Store) CompleteAgentTask(tenantID int64, agentID string, taskID int64, result, taskErr string) error {
+	status := "completed"
+	if taskErr != "" {
+		status = "failed"
+	}
+	_, err := s.db.Exec(`
+		UPDATE agent_tasks SET status=?, result=?, error=?, completed_at=CURRENT_TIMESTAMP
+		WHERE tenant_id=? AND agent_id=? AND id=?
+	`, status, result, taskErr, tenantID, agentID, taskID)
+	return err
+}
+
 // ============ Settings (tenant-scoped) ============
 
 func (s *Store) SetSetting(tenantID int64, key, value string) error {
@@ -484,13 +719,13 @@ func CreateDefaultTenant(s *Store) error {
 		return nil // already exists
 	}
 	t := &Tenant{
-		ID:              1,
-		Slug:            "default",
-		Name:            "Default",
-		Description:     "Default tenant",
-		MaxSeries:       100000,
-		MaxRetention:    15,
-		Enabled:         true,
+		ID:           1,
+		Slug:         "default",
+		Name:         "Default",
+		Description:  "Default tenant",
+		MaxSeries:    100000,
+		MaxRetention: 15,
+		Enabled:      true,
 	}
 	return s.CreateTenant(t)
 }

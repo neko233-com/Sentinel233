@@ -3,11 +3,13 @@ package api
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 	"time"
 
@@ -140,6 +142,80 @@ func TestSentinelCapabilities(t *testing.T) {
 	server.Router().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("capabilities status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestAgentControlPlaneRegisterHeartbeatTasks(t *testing.T) {
+	server, db, cleanup := newTestServer(t)
+	defer cleanup()
+
+	registerBody := []byte(`{"agent_id":"node-1","name":"node-1","hostname":"node-1","version":"test","listen_addr":":23391","labels":{"role":"linux"}}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/agent/v1/register", bytes.NewReader(registerBody))
+	rec := httptest.NewRecorder()
+	server.Router().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("register status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var registerResp struct {
+		Data struct {
+			Token string `json:"token"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &registerResp); err != nil {
+		t.Fatal(err)
+	}
+	if registerResp.Data.Token == "" {
+		t.Fatal("agent registration did not return token")
+	}
+
+	heartbeatBody := []byte(`{"version":"test2","listen_addr":":23391","labels":{"role":"linux"},"metrics":{"sentinel_agent_up":1}}`)
+	req = httptest.NewRequest(http.MethodPost, "/api/agent/v1/heartbeat", bytes.NewReader(heartbeatBody))
+	req.Header.Set("Authorization", "Bearer "+registerResp.Data.Token)
+	rec = httptest.NewRecorder()
+	server.Router().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("heartbeat status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if len(db.AllSeries()) == 0 {
+		t.Fatal("heartbeat metrics were not written to TSDB")
+	}
+
+	token := testLoginToken(t, server)
+	req = httptest.NewRequest(http.MethodPost, "/api/agents/node-1/tasks", bytes.NewReader([]byte(`{"type":"refresh_config","payload":{"reason":"test"}}`)))
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec = httptest.NewRecorder()
+	server.Router().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("create task status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/agent/v1/tasks", nil)
+	req.Header.Set("Authorization", "Bearer "+registerResp.Data.Token)
+	rec = httptest.NewRecorder()
+	server.Router().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("tasks status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var tasksResp struct {
+		Data []struct {
+			ID     int64  `json:"id"`
+			Type   string `json:"type"`
+			Status string `json:"status"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &tasksResp); err != nil {
+		t.Fatal(err)
+	}
+	if len(tasksResp.Data) != 1 || tasksResp.Data[0].Type != "refresh_config" || tasksResp.Data[0].Status != "claimed" {
+		t.Fatalf("tasks response = %#v", tasksResp.Data)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/agent/v1/tasks/"+strconv.FormatInt(tasksResp.Data[0].ID, 10)+"/complete", bytes.NewReader([]byte(`{"result":"ok"}`)))
+	req.Header.Set("Authorization", "Bearer "+registerResp.Data.Token)
+	rec = httptest.NewRecorder()
+	server.Router().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("complete task status = %d, body = %s", rec.Code, rec.Body.String())
 	}
 }
 

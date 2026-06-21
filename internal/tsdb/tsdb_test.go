@@ -72,6 +72,13 @@ func TestSeriesLabelsHash(t *testing.T) {
 	if labels1.Hash() == labels3.Hash() {
 		t.Fatal("different labels should have different hash")
 	}
+	labels4 := Labels{
+		{Name: "job", Value: "test"},
+		{Name: "__name__", Value: "up"},
+	}
+	if labels1.Hash() != labels4.Hash() {
+		t.Fatal("label hash should not depend on label order")
+	}
 }
 
 func TestLabelGet(t *testing.T) {
@@ -118,6 +125,43 @@ func TestWALReplay(t *testing.T) {
 
 	if db2.TotalSamples() != 50 {
 		t.Fatalf("expected 50 samples after replay, got %d", db2.TotalSamples())
+	}
+}
+
+func TestSnapshotSurvivesCompactionAndRestart(t *testing.T) {
+	dir, err := os.MkdirTemp("", "tsdb-snapshot-test-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+
+	labels := Labels{{Name: "__name__", Value: "agent_up"}, {Name: "agent_id", Value: "node-1"}}
+	now := time.Now().UnixMilli()
+	db1, err := OpenDB(DBConfig{DataDir: dir, Retention: 24 * time.Hour, FlushInterval: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 10; i++ {
+		if err := db1.Append(labels, now+int64(i*1000), float64(i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	db1.compact()
+	if err := db1.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	db2, err := OpenDB(DBConfig{DataDir: dir, Retention: 24 * time.Hour, FlushInterval: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db2.Close()
+	samples := db2.Query(labels, now, now+9000)
+	if len(samples) != 10 {
+		t.Fatalf("snapshot samples = %d, want 10", len(samples))
+	}
+	if samples[9].Value != 9 {
+		t.Fatalf("last sample = %#v", samples[9])
 	}
 }
 

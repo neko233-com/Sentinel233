@@ -338,6 +338,45 @@ groups:
   $targetsApi = Invoke-JsonApi -Method "GET" -Url "$BaseUrl/api/v1/targets"
   Assert-Success $targetsApi "prometheus targets api"
 
+  $agentRegisterBody = @{
+    agent_id = "docker-node-1"
+    name = "docker-node-1"
+    hostname = "docker-node-1"
+    version = "e2e"
+    listen_addr = ":23391"
+    labels = @{ role = "linux"; env = "e2e" }
+  } | ConvertTo-Json -Depth 10
+  $agentRegister = Invoke-JsonApi -Method "POST" -Url "$BaseUrl/api/agent/v1/register" -Body $agentRegisterBody
+  Assert-Success $agentRegister "agent register"
+  if (-not $agentRegister.data.token) {
+    throw "agent registration did not return token"
+  }
+  $agentHeaders = @{ Authorization = "Bearer $($agentRegister.data.token)" }
+  $heartbeatBody = @{
+    version = "e2e"
+    listen_addr = ":23391"
+    labels = @{ role = "linux"; env = "e2e" }
+    metrics = @{ sentinel_agent_up = 1; sentinel_agent_tasks_completed_total = 0 }
+  } | ConvertTo-Json -Depth 10
+  $heartbeat = Invoke-JsonApi -Method "POST" -Url "$BaseUrl/api/agent/v1/heartbeat" -Headers $agentHeaders -Body $heartbeatBody
+  Assert-Success $heartbeat "agent heartbeat"
+
+  $taskBody = @{
+    type = "refresh_config"
+    payload = @{ reason = "docker-e2e" }
+  } | ConvertTo-Json -Depth 10
+  $task = Invoke-JsonApi -Method "POST" -Url "$BaseUrl/api/agents/docker-node-1/tasks" -Headers $headers -Body $taskBody
+  Assert-Success $task "agent task create"
+  $claimedTasks = Invoke-JsonApi -Method "GET" -Url "$BaseUrl/api/agent/v1/tasks" -Headers $agentHeaders
+  Assert-Success $claimedTasks "agent task claim"
+  if (@($claimedTasks.data).Count -lt 1) {
+    throw "agent did not claim any task"
+  }
+  $taskId = [int64]$claimedTasks.data[0].id
+  $completeBody = @{ result = "ok" } | ConvertTo-Json
+  $completed = Invoke-JsonApi -Method "POST" -Url "$BaseUrl/api/agent/v1/tasks/$taskId/complete" -Headers $agentHeaders -Body $completeBody
+  Assert-Success $completed "agent task complete"
+
   Write-Host "Docker Grafana/Prometheus ecosystem E2E passed for $BaseUrl"
 } finally {
   if (-not $KeepRunning) {

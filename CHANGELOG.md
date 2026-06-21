@@ -6,6 +6,8 @@ All notable changes to Sentinel233 will be documented in this file.
 
 ### Added
 - Added first-class `/api/ecosystem/capabilities`, `/api/ecosystem/import`, and `/api/ecosystem/alertmanager/webhook` endpoints for stable Grafana/Prometheus/Alertmanager ecosystem integration.
+- Added agent-first control plane endpoints for agent registration, heartbeat metrics, task claiming, and task completion.
+- Added TSDB snapshot persistence so retained samples survive compaction and restart instead of relying only on WAL replay.
 - Added `scripts/docker-ecosystem-e2e.ps1` as the primary Docker ecosystem verification script.
 - Added Prometheus API discovery and metadata endpoints including `/api/v1/labels`, `/api/v1/metadata`, `/api/v1/targets/metadata`, `/api/v1/status/tsdb`, `/api/v1/alertmanagers`, and `/api/v1/query_exemplars`.
 - Expanded the Prometheus ecosystem catalog with Elasticsearch, MongoDB, Kafka, RabbitMQ, HAProxy, etcd, MinIO, Windows exporter, SNMP, and OpenTelemetry Collector presets plus matching dashboards.
