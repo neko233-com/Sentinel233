@@ -6,7 +6,11 @@
 .EXAMPLE
     iwr -useb https://raw.githubusercontent.com/neko233-com/Sentinel233/main/scripts/install-server.ps1 | iex
 #>
-param([string]$Version = "latest")
+param(
+    [string]$Version = "latest",
+    [string]$DataDir = "$env:LOCALAPPDATA\sentinel233\data",
+    [switch]$InstallService
+)
 
 $ErrorActionPreference = "Stop"
 
@@ -51,9 +55,10 @@ function Install-Sentinel233Server {
         Invoke-WebRequest -Uri $url -OutFile "$tmpDir\$archive" -UseBasicParsing
     } catch {
         Write-Host "Trying direct binary download..."
-        $exeUrl = "https://github.com/$Repo/releases/download/$Ver/$Binary-windows-$arch.exe"
+        $exeUrl = "https://github.com/$Repo/releases/download/$Ver/$Binary-$verNum-windows-$arch.exe"
         Invoke-WebRequest -Uri $exeUrl -OutFile "$installDir\$Binary.exe" -UseBasicParsing
         Write-Host "Installed to $installDir\$Binary.exe"
+        Install-ServiceIfRequested "$installDir\$Binary.exe"
         Print-Usage
         return
     }
@@ -68,16 +73,35 @@ function Install-Sentinel233Server {
 
     Write-Host ""
     Write-Host "$Binary server $Ver installed to $installDir\$Binary.exe"
+    Install-ServiceIfRequested "$installDir\$Binary.exe"
     Print-Usage
+}
+
+function Install-ServiceIfRequested {
+    param([string]$ExePath)
+    if (!$InstallService) { return }
+    if (!(Test-Path $DataDir)) { New-Item -ItemType Directory -Path $DataDir -Force | Out-Null }
+    $svc = Get-Service -Name "sentinel233-server" -ErrorAction SilentlyContinue
+    if ($svc) {
+        Write-Host "Windows service sentinel233-server already exists."
+        return
+    }
+    $binPath = "`"$ExePath`" -data `"$DataDir`""
+    New-Service -Name "sentinel233-server" -BinaryPathName $binPath -DisplayName "Sentinel233 Server" -Description "Sentinel233 local TSDB and monitoring server" -StartupType Automatic | Out-Null
+    Start-Service "sentinel233-server"
+    Write-Host "Windows service sentinel233-server is running."
 }
 
 function Print-Usage {
     Write-Host ""
     Write-Host "Quick Start:"
-    Write-Host "  $Binary.exe                          # Start server on :23390"
-    Write-Host "  $Binary.exe -addr :8080              # Custom port"
-    Write-Host "  $Binary.exe -config sentinel233.yaml # With config file"
+    Write-Host "  $Binary.exe -data `"$DataDir`"       # Start server on :23390"
+    Write-Host "  $Binary.exe -addr :8080 -data `"$DataDir`""
+    Write-Host "  $Binary.exe -config sentinel233.yaml -data `"$DataDir`""
     Write-Host "  $Binary.exe -version                 # Show version"
+    Write-Host ""
+    Write-Host "Install Windows service:"
+    Write-Host "  .\install-server.ps1 -InstallService"
     Write-Host ""
     Write-Host "Add to PATH: `$env:PATH += '$installDir'"
 }

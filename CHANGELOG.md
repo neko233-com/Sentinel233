@@ -5,6 +5,7 @@ All notable changes to Sentinel233 will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- Added a chunked local TSDB head with sharded series maps, label inverted index stats, and TSDB write/query benchmarks.
 - Added hot-updatable TSDB retention from the admin GUI, with persisted runtime config reloaded on server restart.
 - Added first-class `/api/ecosystem/capabilities`, `/api/ecosystem/import`, and `/api/ecosystem/alertmanager/webhook` endpoints for stable Grafana/Prometheus/Alertmanager ecosystem integration.
 - Added agent-first control plane endpoints for agent registration, heartbeat metrics, task claiming, and task completion.
@@ -16,6 +17,7 @@ All notable changes to Sentinel233 will be documented in this file.
 - Added an independent HTML-driven GitHub Pages documentation site under `site/`.
 
 ### Changed
+- Reworked the in-memory TSDB storage path around fixed-size chunks, cached WAL label encodings, and indexed equal-label lookups for higher local write/query throughput.
 - Changed the default storage retention to 8 days for real-time monitoring workloads and optimized in-memory series range queries/retention trimming.
 - Reframed docs, UI copy, CI job names, and verification commands from temporary migration language to stable ecosystem integration language.
 - Standardized `/api/v1/query_range` responses to Prometheus matrix shape and allowed GET/POST query forms.

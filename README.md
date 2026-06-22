@@ -10,7 +10,7 @@
 
 | 能力 | 说明 |
 |------|------|
-| **自研 TSDB** | WAL 崩溃恢复 + snapshot 快照恢复 + 内存热查询 + 默认近 8 天保留 + GUI 热修改保留期 |
+| **自研 TSDB** | 本地 chunked head + 分片 series map + 标签倒排索引 + WAL 崩溃恢复 + snapshot 快照恢复 + 默认近 8 天保留 + GUI 热修改保留期 |
 | **完整 PromQL** | 瞬时/范围向量、二元运算、聚合(sum/avg/min/max/count/stddev/topk...)、30+ 内置函数(rate/increase/delta/abs/ceil/floor/round/sqrt/log...)、标签匹配(=, !=, =~, !~) |
 | **Prometheus 生态 API** | `/api/v1/query`、`/api/v1/query_range`、`/api/v1/series`、`/api/v1/labels`、`/api/v1/label/{name}/values`、`/api/v1/metadata`、`/api/v1/targets` |
 | **Scrape 采集** | 拉模式采集 + OpenMetrics 解析 + 动态目标管理 |

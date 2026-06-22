@@ -66,7 +66,7 @@ main() {
     BIN_PATH=$(find "$TMPDIR" -name "${BINARY}${EXT}" -type f | head -1)
   else
     echo "Archive not found, trying direct binary..."
-    BIN_URL="https://github.com/${REPO}/releases/download/${VERSION}/${BINARY}-${OS}-${ARCH}${EXT}"
+    BIN_URL="https://github.com/${REPO}/releases/download/${VERSION}/${BINARY}-${VER_NUM}-${OS}-${ARCH}${EXT}"
     curl -fsSL "$BIN_URL" -o "$TMPDIR/${BINARY}${EXT}"
     BIN_PATH="$TMPDIR/${BINARY}${EXT}"
   fi
@@ -91,8 +91,8 @@ main() {
   echo "${BINARY} ${VERSION} installed to ${INSTALL_DIR}/${BINARY}${EXT}"
   echo ""
   echo "Usage:"
-  echo "  ${BINARY} -server http://your-server:23390"
-  echo "  ${BINARY} -addr :23391 -server http://your-server:23390"
+  echo "  ${BINARY} -server http://your-server:23390 -enroll-token \"\$SENTINEL233_AGENT_ENROLL_TOKEN\""
+  echo "  ${BINARY} -addr :23391 -server http://your-server:23390 -labels env=prod,role=game"
   echo ""
 
   case ":$PATH:" in

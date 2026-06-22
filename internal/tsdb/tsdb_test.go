@@ -1,6 +1,7 @@
 package tsdb
 
 import (
+	"bytes"
 	"os"
 	"testing"
 	"time"
@@ -289,5 +290,101 @@ func TestQueryByMatcher(t *testing.T) {
 	series := db.QueryByMatcher(m, 0, now)
 	if len(series) != 2 {
 		t.Fatalf("expected 2 series with __name__=up, got %d", len(series))
+	}
+}
+
+func TestQueryByMultiMatcherUsesIndexAndFilters(t *testing.T) {
+	dir, _ := os.MkdirTemp("", "tsdb-multi-matcher-*")
+	defer os.RemoveAll(dir)
+	db, err := OpenDB(DBConfig{DataDir: dir, Retention: 24 * time.Hour, FlushInterval: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	now := time.Now().UnixMilli()
+	_ = db.Append(Labels{{Name: "__name__", Value: "up"}, {Name: "job", Value: "api"}, {Name: "env", Value: "prod"}}, now, 1)
+	_ = db.Append(Labels{{Name: "__name__", Value: "up"}, {Name: "job", Value: "api"}, {Name: "env", Value: "dev"}}, now, 1)
+	_ = db.Append(Labels{{Name: "__name__", Value: "up"}, {Name: "job", Value: "web"}, {Name: "env", Value: "prod"}}, now, 1)
+
+	series := db.QueryByMatcher(MultiMatcher{Matchers: []LabelMatcher{
+		EqualMatcher{Name: "__name__", Value: "up"},
+		EqualMatcher{Name: "job", Value: "api"},
+		EqualMatcher{Name: "env", Value: "prod"},
+	}}, 0, now)
+	if len(series) != 1 {
+		t.Fatalf("expected 1 fully matched series, got %d", len(series))
+	}
+}
+
+func TestStatsReportsChunkedHead(t *testing.T) {
+	dir, _ := os.MkdirTemp("", "tsdb-stats-*")
+	defer os.RemoveAll(dir)
+	db, err := OpenDB(DBConfig{DataDir: dir, Retention: 24 * time.Hour, FlushInterval: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	labels := Labels{{Name: "__name__", Value: "load"}, {Name: "job", Value: "api"}}
+	now := time.Now().UnixMilli()
+	for i := 0; i < samplesPerChunk+1; i++ {
+		if err := db.Append(labels, now+int64(i), float64(i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stats := db.Stats()
+	if stats.Series != 1 || stats.Samples != samplesPerChunk+1 {
+		t.Fatalf("unexpected stats counts: %#v", stats)
+	}
+	if stats.Chunks != 2 {
+		t.Fatalf("expected 2 chunks, got %d", stats.Chunks)
+	}
+	if stats.ShardCount != seriesShardCount {
+		t.Fatalf("expected %d shards, got %d", seriesShardCount, stats.ShardCount)
+	}
+	if stats.IndexedLabels == 0 || stats.IndexedValues == 0 {
+		t.Fatalf("expected label index stats, got %#v", stats)
+	}
+}
+
+func TestExportImportBackup(t *testing.T) {
+	sourceDir, _ := os.MkdirTemp("", "tsdb-export-*")
+	defer os.RemoveAll(sourceDir)
+	source, err := OpenDB(DBConfig{DataDir: sourceDir, Retention: 24 * time.Hour, FlushInterval: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer source.Close()
+
+	labels := Labels{{Name: "__name__", Value: "backup_metric"}, {Name: "job", Value: "api"}}
+	now := time.Now().UnixMilli()
+	for i := 0; i < 10; i++ {
+		if err := source.Append(labels, now+int64(i), float64(i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var buf bytes.Buffer
+	if err := source.Export(&buf); err != nil {
+		t.Fatal(err)
+	}
+
+	targetDir, _ := os.MkdirTemp("", "tsdb-import-*")
+	defer os.RemoveAll(targetDir)
+	target, err := OpenDB(DBConfig{DataDir: targetDir, Retention: 24 * time.Hour, FlushInterval: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer target.Close()
+	imported, err := target.Import(bytes.NewReader(buf.Bytes()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if imported != 10 {
+		t.Fatalf("imported = %d, want 10", imported)
+	}
+	samples := target.Query(labels, now, now+9)
+	if len(samples) != 10 {
+		t.Fatalf("imported samples = %d, want 10", len(samples))
 	}
 }

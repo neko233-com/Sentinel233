@@ -52,12 +52,12 @@ function Install-Sentinel233Agent {
         Invoke-WebRequest -Uri $url -OutFile "$tmpDir\$archive" -UseBasicParsing
     } catch {
         Write-Host "Trying direct binary download..."
-        $exeUrl = "https://github.com/$Repo/releases/download/$Ver/$Binary-windows-$arch.exe"
+        $exeUrl = "https://github.com/$Repo/releases/download/$Ver/$Binary-$verNum-windows-$arch.exe"
         Invoke-WebRequest -Uri $exeUrl -OutFile "$installDir\$Binary.exe" -UseBasicParsing
         Write-Host "Installed to $installDir\$Binary.exe"
         Write-Host ""
         Write-Host "Add to PATH: `$env:PATH += '$installDir'"
-        Write-Host "Usage: $Binary -server http://your-server:23390"
+        Write-Host "Usage: $Binary -server http://your-server:23390 -enroll-token `$env:SENTINEL233_AGENT_ENROLL_TOKEN"
         return
     }
 
@@ -73,8 +73,8 @@ function Install-Sentinel233Agent {
     Write-Host "$Binary $Ver installed to $installDir\$Binary.exe"
     Write-Host ""
     Write-Host "Usage:"
-    Write-Host "  $Binary -server http://your-server:23390"
-    Write-Host "  $Binary -addr :23391 -server http://your-server:23390"
+    Write-Host "  $Binary -server http://your-server:23390 -enroll-token `$env:SENTINEL233_AGENT_ENROLL_TOKEN"
+    Write-Host "  $Binary -addr :23391 -server http://your-server:23390 -labels env=prod,role=game"
     Write-Host ""
     Write-Host "Add to PATH: `$env:PATH += '$installDir'"
 }

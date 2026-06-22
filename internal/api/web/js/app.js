@@ -2119,6 +2119,16 @@ function renderConfigEditor() {
         <div class="form-group"><label>采集目标 JSON</label><textarea id="cfg-targets" class="code">${escapeHtml(JSON.stringify(cfg.scrape.targets || [], null, 2))}</textarea></div>
       </section>
       <section class="band">
+        <div class="section-title"><div><h2>存储维护</h2><p>本地 TSDB chunk、索引、备份和迁移。</p></div><div><button class="btn btn-secondary btn-sm" onclick="refreshStorageStats()">刷新</button> <button class="btn btn-primary btn-sm" onclick="exportStorageBackup()">导出备份</button> <button class="btn btn-secondary btn-sm" onclick="document.getElementById('storage-import-file').click()">导入</button></div></div>
+        <input id="storage-import-file" type="file" accept=".gz,.tgz,.tar.gz,application/gzip" style="display:none" onchange="importStorageBackup(this)">
+        <div id="storage-stats" class="metric-grid">
+          <div class="metric"><label>Series</label><strong>-</strong><span>当前时间序列</span></div>
+          <div class="metric"><label>Samples</label><strong>-</strong><span>Head 样本</span></div>
+          <div class="metric"><label>Chunks</label><strong>-</strong><span>固定块数量</span></div>
+          <div class="metric"><label>Index</label><strong>-</strong><span>标签倒排索引</span></div>
+        </div>
+      </section>
+      <section class="band">
         <div class="section-title"><div><h2>一键方案</h2><p>根据部署规模快速写入推荐值。</p></div></div>
         <div class="preset-grid">
           ${Object.entries(configPresets).map(([key, value]) => `<button class="preset" onclick="applyConfigPreset('${key}')"><strong>${value.label}</strong><span>${JSON.stringify(value.patch.storage)}</span></button>`).join('')}
@@ -2128,6 +2138,7 @@ function renderConfigEditor() {
       </section>
     </div>
   `;
+  refreshStorageStats();
 }
 
 function normalizeConfig(cfg) {
@@ -2194,6 +2205,60 @@ async function saveConfig(cfg) {
   activeConfig = resp.data.config;
   toast(resp.data.restartNeeded ? '配置已应用；存储引擎参数重启后完全生效' : '配置已应用');
   renderConfigEditor();
+}
+
+async function refreshStorageStats() {
+  if (!session?.token) return;
+  try {
+    const resp = await api('/api/admin/storage/stats');
+    const stats = resp.data || {};
+    const el = document.getElementById('storage-stats');
+    if (!el) return;
+    el.innerHTML = `
+      <div class="metric"><label>Series</label><strong>${formatNumber(stats.series)}</strong><span>${stats.shard_count || 0} shards</span></div>
+      <div class="metric"><label>Samples</label><strong>${formatNumber(stats.samples)}</strong><span>head samples</span></div>
+      <div class="metric"><label>Chunks</label><strong>${formatNumber(stats.chunks)}</strong><span>${stats.samples_per_chunk || 0} samples/chunk</span></div>
+      <div class="metric"><label>Index</label><strong>${formatNumber(stats.indexed_values)}</strong><span>${stats.indexed_labels || 0} labels</span></div>
+    `;
+  } catch (e) {
+    toast(e.message);
+  }
+}
+
+async function exportStorageBackup() {
+  if (!session?.token) return loginDialog();
+  const headers = { Authorization: `Bearer ${session.token}` };
+  const resp = await fetch('/api/admin/storage/export', { headers });
+  if (!resp.ok) return toast(`导出失败: HTTP ${resp.status}`);
+  const blob = await resp.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  const disposition = resp.headers.get('Content-Disposition') || '';
+  const match = disposition.match(/filename="([^"]+)"/);
+  a.href = url;
+  a.download = match?.[1] || `sentinel233-tsdb-${Date.now()}.tar.gz`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+  toast('备份已导出');
+}
+
+async function importStorageBackup(input) {
+  if (!session?.token) return loginDialog();
+  const file = input.files?.[0];
+  input.value = '';
+  if (!file) return;
+  if (!confirm(`导入 ${file.name}？同名序列会追加样本。`)) return;
+  const resp = await fetch('/api/admin/storage/import', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${session.token}` },
+    body: file,
+  });
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok || data.status === 'error') return toast(data.error || `导入失败: HTTP ${resp.status}`);
+  toast(`已导入 ${formatNumber(data.data?.imported)} 个样本`);
+  refreshStorageStats();
 }
 
 function renderDocs() {
@@ -2337,5 +2402,8 @@ window.nativeClientDialog = nativeClientDialog;
 window.applyConfigPreset = applyConfigPreset;
 window.saveConfigFromForm = saveConfigFromForm;
 window.saveConfigFromJson = saveConfigFromJson;
+window.refreshStorageStats = refreshStorageStats;
+window.exportStorageBackup = exportStorageBackup;
+window.importStorageBackup = importStorageBackup;
 window.loginDialog = loginDialog;
 window.login = login;

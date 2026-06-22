@@ -149,20 +149,37 @@ func (s *Server) handleStatusTSDB(w http.ResponseWriter, r *http.Request) {
 	sort.Slice(metricCounts, func(i, j int) bool {
 		return coerceInt(metricCounts[i]["value"], 0) > coerceInt(metricCounts[j]["value"], 0)
 	})
-	totalSamples := 0
+	tsdbStats := map[string]interface{}{}
 	if s.db != nil {
-		totalSamples = s.db.TotalSamples()
+		stats := s.db.Stats()
+		tsdbStats = map[string]interface{}{
+			"numSeries":       stats.Series,
+			"numSamples":      stats.Samples,
+			"chunkCount":      stats.Chunks,
+			"shardCount":      stats.ShardCount,
+			"indexedLabels":   stats.IndexedLabels,
+			"indexedValues":   stats.IndexedValues,
+			"samplesPerChunk": stats.SamplesPerChunk,
+			"minTime":         stats.MinTime,
+			"maxTime":         stats.MaxTime,
+		}
+	} else {
+		tsdbStats = map[string]interface{}{
+			"numSeries":       len(series),
+			"numSamples":      0,
+			"chunkCount":      0,
+			"shardCount":      0,
+			"indexedLabels":   0,
+			"indexedValues":   0,
+			"samplesPerChunk": 0,
+			"minTime":         0,
+			"maxTime":         time.Now().UnixMilli(),
+		}
 	}
 	s.jsonOK(w, map[string]interface{}{
 		"status": "success",
 		"data": map[string]interface{}{
-			"headStats": map[string]interface{}{
-				"numSeries":     len(series),
-				"numLabelPairs": len(labelValueCounts),
-				"chunkCount":    totalSamples,
-				"minTime":       0,
-				"maxTime":       time.Now().UnixMilli(),
-			},
+			"headStats":                  tsdbStats,
 			"seriesCountByMetricName":    metricCounts,
 			"labelValueCountByLabelName": labelValueCounts,
 		},

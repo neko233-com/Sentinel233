@@ -8,7 +8,6 @@ import (
 	"math"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
 )
@@ -43,10 +42,12 @@ func NewWAL(dir string) (*WAL, error) {
 }
 
 func (w *WAL) Write(entry WALEntry) error {
+	return w.WriteEncoded(labelsToString(entry.Labels), entry.Timestamp, entry.Value)
+}
+
+func (w *WAL) WriteEncoded(labelsStr string, timestamp int64, value float64) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-
-	labelsStr := labelsToString(entry.Labels)
 
 	var buf [binary.MaxVarintLen64]byte
 	// write label string length
@@ -59,12 +60,12 @@ func (w *WAL) Write(entry WALEntry) error {
 		return err
 	}
 	// write timestamp
-	n = binary.PutVarint(buf[:], entry.Timestamp)
+	n = binary.PutVarint(buf[:], timestamp)
 	if _, err := w.writer.Write(buf[:n]); err != nil {
 		return err
 	}
 	// write value as uint64 bits
-	bits := math.Float64bits(entry.Value)
+	bits := math.Float64bits(value)
 	binary.LittleEndian.PutUint16(buf[:2], uint16(bits>>48))
 	binary.LittleEndian.PutUint16(buf[2:4], uint16(bits>>32))
 	binary.LittleEndian.PutUint16(buf[4:6], uint16(bits>>16))
@@ -234,9 +235,7 @@ func (w *WAL) Close() error {
 }
 
 func labelsToString(labels Labels) string {
-	sort.Slice(labels, func(i, j int) bool {
-		return labels[i].Name < labels[j].Name
-	})
+	labels = sortedLabels(labels)
 	parts := make([]string, len(labels))
 	for i, l := range labels {
 		parts[i] = l.Name + "=" + l.Value

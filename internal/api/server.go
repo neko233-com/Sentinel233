@@ -203,6 +203,9 @@ func (s *Server) Router() chi.Router {
 		r.Use(s.tenantMiddleware)
 		r.Get("/config", s.requireRole("admin", s.handleGetAdminConfig))
 		r.Put("/config", s.requireRole("admin", s.handleUpdateAdminConfig))
+		r.Get("/storage/stats", s.requireRole("admin", s.handleAdminStorageStats))
+		r.Get("/storage/export", s.requireRole("admin", s.handleAdminStorageExport))
+		r.Post("/storage/import", s.requireRole("admin", s.handleAdminStorageImport))
 	})
 
 	// System API
@@ -1973,6 +1976,50 @@ func restartNeededAfterConfigUpdate(prev, next *config.Config) bool {
 		return true
 	}
 	return false
+}
+
+func (s *Server) handleAdminStorageStats(w http.ResponseWriter, r *http.Request) {
+	if s.db == nil {
+		s.jsonError(w, "tsdb unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	s.jsonOK(w, map[string]interface{}{
+		"status": "success",
+		"data":   s.db.Stats(),
+	})
+}
+
+func (s *Server) handleAdminStorageExport(w http.ResponseWriter, r *http.Request) {
+	if s.db == nil {
+		s.jsonError(w, "tsdb unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	name := fmt.Sprintf("sentinel233-tsdb-%s.tar.gz", time.Now().UTC().Format("20060102T150405Z"))
+	w.Header().Set("Content-Type", "application/gzip")
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, name))
+	if err := s.db.Export(w); err != nil {
+		s.logger.Error("storage export failed", "err", err)
+	}
+}
+
+func (s *Server) handleAdminStorageImport(w http.ResponseWriter, r *http.Request) {
+	if s.db == nil {
+		s.jsonError(w, "tsdb unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	imported, err := s.db.Import(r.Body)
+	if err != nil {
+		s.jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	s.db.Compact()
+	s.jsonOK(w, map[string]interface{}{
+		"status": "success",
+		"data": map[string]interface{}{
+			"imported": imported,
+			"stats":    s.db.Stats(),
+		},
+	})
 }
 
 func validateRuntimeConfig(cfg *config.Config) error {

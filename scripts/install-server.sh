@@ -45,6 +45,7 @@ main() {
   else
     INSTALL_DIR="/usr/local/bin"
   fi
+  DATA_DIR="${SENTINEL233_DATA:-/var/lib/sentinel233}"
 
   if [ "$OS" = "windows" ]; then
     EXT=".exe"
@@ -65,7 +66,7 @@ main() {
     BIN_PATH=$(find "$TMPDIR" -name "${BINARY}${EXT}" -type f | head -1)
   else
     echo "Archive not found, trying direct binary..."
-    BIN_URL="https://github.com/${REPO}/releases/download/${VERSION}/${BINARY}-${OS}-${ARCH}${EXT}"
+    BIN_URL="https://github.com/${REPO}/releases/download/${VERSION}/${BINARY}-${VER_NUM}-${OS}-${ARCH}${EXT}"
     curl -fsSL "$BIN_URL" -o "$TMPDIR/${BINARY}${EXT}"
     BIN_PATH="$TMPDIR/${BINARY}${EXT}"
   fi
@@ -90,14 +91,39 @@ main() {
   echo "${BINARY} server ${VERSION} installed to ${INSTALL_DIR}/${BINARY}${EXT}"
   echo ""
   echo "Quick Start:"
-  echo "  ${BINARY}                              # Start on :23390"
-  echo "  ${BINARY} -addr :8080                  # Custom port"
-  echo "  ${BINARY} -config sentinel233.yaml     # With config file"
+  echo "  ${BINARY} -data ${DATA_DIR}            # Start on :23390"
+  echo "  ${BINARY} -addr :8080 -data ${DATA_DIR} # Custom port"
+  echo "  ${BINARY} -config sentinel233.yaml -data ${DATA_DIR}"
   echo "  ${BINARY} -version                     # Show version"
   echo ""
-  echo "Enable systemd autostart (Linux):"
-  echo "  sudo systemctl enable --now sentinel233-server"
-  echo ""
+  if [ "${SENTINEL233_INSTALL_SERVICE:-0}" = "1" ] && [ "$OS" = "linux" ] && command -v systemctl >/dev/null 2>&1; then
+    echo "Installing systemd service..."
+    sudo mkdir -p "$DATA_DIR"
+    sudo tee /etc/systemd/system/sentinel233-server.service >/dev/null <<EOF
+[Unit]
+Description=Sentinel233 local TSDB and monitoring server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=${INSTALL_DIR}/${BINARY} -data ${DATA_DIR}
+Restart=always
+RestartSec=3
+LimitNOFILE=1048576
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    sudo systemctl daemon-reload
+    sudo systemctl enable --now sentinel233-server
+    echo "systemd service sentinel233-server is running."
+    echo ""
+  else
+    echo "Enable systemd autostart (Linux):"
+    echo "  SENTINEL233_INSTALL_SERVICE=1 curl -fsSL https://raw.githubusercontent.com/${REPO}/main/scripts/install-server.sh | bash"
+    echo ""
+  fi
 
   case ":$PATH:" in
     *":$INSTALL_DIR:"*) ;;
